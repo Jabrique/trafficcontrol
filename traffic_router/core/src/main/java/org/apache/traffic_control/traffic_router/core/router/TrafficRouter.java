@@ -742,8 +742,20 @@ public class TrafficRouter {
 			return result;
 		}
 
+		// Determine which IP to use for geolocation/CZ decisions
+		String routingIpAddress = request.getClientIP();
+		if (isAnycastGeoRoutingEnabled()) {
+			final String own = getOwnIpAddress();
+			if (own != null) {
+				LOGGER.info("anycast.geolocation.routing is enabled (DNS), using Traffic Router's own IP for routing: " + own);
+				routingIpAddress = own;
+			} else {
+				LOGGER.warn("Parameter 'anycast.geolocation.routing' is true (DNS), but could not determine Traffic Router's own IP. Using client IP instead.");
+			}
+		}
+
 		final IPVersions requestVersion = request.getQueryType() == Type.AAAA ? IPVersions.IPV6ONLY : IPVersions.IPV4ONLY;
-		final CacheLocation cacheLocation = getCoverageZoneCacheLocation(request.getClientIP(), ds, false, track, requestVersion);
+		final CacheLocation cacheLocation = getCoverageZoneCacheLocation(routingIpAddress, ds, false, track, requestVersion);
 		List<Cache> caches = selectCachesByCZ(ds, cacheLocation, track, requestVersion);
 
 		if (caches != null) {
@@ -763,6 +775,7 @@ public class TrafficRouter {
 		}
 
 		try {
+			// Federations should still be based on the real client IP
 			final List<InetRecord> inetRecords = federationRegistry.findInetRecords(ds.getId(), CidrAddress.fromString(request.getClientIP()));
 
 			if (inetRecords != null && !inetRecords.isEmpty()) {
@@ -775,7 +788,7 @@ public class TrafficRouter {
 		}
 
 		if (track.continueGeo) {
-			caches = selectCachesByGeo(request.getClientIP(), ds, cacheLocation, track, requestVersion);
+			caches = selectCachesByGeo(routingIpAddress, ds, cacheLocation, track, requestVersion);
 		}
 
 		if (caches != null) {
@@ -2029,5 +2042,46 @@ public class TrafficRouter {
 
 	public Map<String, Geolocation> getDefaultGeoLocationsOverride() {
 		return defaultGeolocationsOverride;
+	}
+
+	private boolean isAnycastGeoRoutingEnabled() {
+		if (this.cacheRegister == null) { return false; }
+		final JsonNode config = this.cacheRegister.getConfig();
+		if (config == null || !config.has("anycast.geolocation.routing")) { return false; }
+		final JsonNode routingNode = config.get("anycast.geolocation.routing");
+		if (routingNode.isBoolean()) { return routingNode.asBoolean(false); }
+		if (routingNode.isTextual()) { return "true".equalsIgnoreCase(routingNode.asText()); }
+		return routingNode.asBoolean(false);
+	}
+
+	/**
+	 * Finds the IP address of this Traffic Router instance (IPv4 preferred).
+	 * Matches the short hostname against contentRouters node IDs and
+	 * falls back to the OS local host address if CRConfig mapping isn't found.
+	 */
+	private String getOwnIpAddress() {
+		try {
+			final String fullHostname = InetAddress.getLocalHost().getHostName();
+			final String shortHostname = fullHostname.split("\\.")[0];
+
+			for (final TrafficRouterLocation trLocation : this.cacheRegister.getEdgeTrafficRouterLocations()) {
+				for (final Node routerNode : trLocation.getTrafficRouters()) {
+					if (shortHostname.equals(routerNode.getId()) && routerNode.getIp4() != null) {
+						return routerNode.getIp4().getHostAddress();
+					}
+				}
+			}
+
+			// Fallback to local host address if no mapping found
+			try {
+				final String localIp = InetAddress.getLocalHost().getHostAddress();
+				if (localIp != null && !localIp.isEmpty()) {
+					return localIp;
+				}
+			} catch (Exception ex) { LOGGER.debug("Local host fallback IP lookup failed: " + ex.getMessage()); }
+		} catch (Exception e) {
+			LOGGER.error("Failed to determine Traffic Router own IP: " + e.getMessage());
+		}
+		return null;
 	}
 }
