@@ -36,6 +36,7 @@ import (
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/config"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/dbhelpers"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/trafficvault"
+	"github.com/jmoiron/sqlx"
 )
 
 type DsKey struct {
@@ -115,7 +116,8 @@ func renewCertificates(w http.ResponseWriter, r *http.Request, deprecated bool) 
 		api.HandleErr(w, r, inf.Tx.Tx, statusCode, userErr, sysErr)
 		return
 	}
-	ctx, cancelTx := context.WithTimeout(r.Context(), AcmeTimeout*time.Duration(len(existingCerts)))
+	ctx, cancelTx := context.WithTimeout(context.Background(), AcmeTimeout*time.Duration(len(existingCerts)))
+	db, err := api.GetDB(r.Context())
 
 	asyncStatusId, errCode, userErr, sysErr := api.InsertAsyncStatus(inf.Tx.Tx, "ACME async job has started.")
 	if userErr != nil || sysErr != nil {
@@ -124,7 +126,7 @@ func renewCertificates(w http.ResponseWriter, r *http.Request, deprecated bool) 
 		return
 	}
 
-	go RunAutorenewal(existingCerts, inf.Config, ctx, cancelTx, inf.User, asyncStatusId, inf.Vault)
+	go RunAutorenewal(existingCerts, inf.Config, db, ctx, cancelTx, inf.User, asyncStatusId, inf.Vault)
 
 	var alerts tc.Alerts
 	if deprecated {
@@ -140,17 +142,10 @@ func renewCertificates(w http.ResponseWriter, r *http.Request, deprecated bool) 
 	api.WriteAlerts(w, r, http.StatusAccepted, alerts)
 
 }
-func RunAutorenewal(existingCerts []ExistingCerts, cfg *config.Config, ctx context.Context, cancelTx context.CancelFunc, currentUser *auth.CurrentUser, asyncStatusId int, tv trafficvault.TrafficVault) {
+func RunAutorenewal(existingCerts []ExistingCerts, cfg *config.Config, db *sqlx.DB, ctx context.Context, cancelTx context.CancelFunc, currentUser *auth.CurrentUser, asyncStatusId int, tv trafficvault.TrafficVault) {
 	defer cancelTx()
-	db, err := api.GetDB(ctx)
-	if err != nil {
-		log.Errorf("Error getting db: %s", err.Error())
-		if asycErr := api.UpdateAsyncStatus(db, api.AsyncFailed, "ACME renewal failed.", asyncStatusId, true); asycErr != nil {
-			log.Errorf("updating async status for id %v: %v", asyncStatusId, asycErr)
-		}
-		return
-	}
-	tx, err := db.Begin()
+
+	tx, err := db.Beginx()
 	if err != nil {
 		log.Errorf("Error getting tx: %s", err.Error())
 		if asycErr := api.UpdateAsyncStatus(db, api.AsyncFailed, "ACME renewal failed.", asyncStatusId, true); asycErr != nil {
@@ -160,7 +155,7 @@ func RunAutorenewal(existingCerts []ExistingCerts, cfg *config.Config, ctx conte
 	}
 	defer tx.Commit()
 
-	logTx, err := db.Begin()
+	logTx, err := db.Beginx()
 	if err != nil {
 		log.Errorf("Error getting logTx: %s", err.Error())
 		if asycErr := api.UpdateAsyncStatus(db, api.AsyncFailed, "ACME renewal failed.", asyncStatusId, true); asycErr != nil {
@@ -181,7 +176,7 @@ func RunAutorenewal(existingCerts []ExistingCerts, cfg *config.Config, ctx conte
 		}
 
 		dsExpInfo := DsExpirationInfo{}
-		keyObj, ok, err := tv.GetDeliveryServiceSSLKeys(ds.XmlId, strconv.Itoa(int(ds.Version.Int64)), tx, ctx)
+		keyObj, ok, err := tv.GetDeliveryServiceSSLKeys(ds.XmlId, strconv.Itoa(int(ds.Version.Int64)), tx.Tx, ctx)
 		if err != nil {
 			log.Errorf("getting ssl keys for xmlId: %s and version: %d : %s", ds.XmlId, ds.Version.Int64, err.Error())
 			dsExpInfo.XmlId = ds.XmlId
@@ -248,7 +243,7 @@ func RunAutorenewal(existingCerts []ExistingCerts, cfg *config.Config, ctx conte
 				},
 			}
 
-			if err := GetAcmeCertificates(cfg, req, ctx, nil, false, currentUser, 0, tv); err != nil {
+			if err := GetAcmeCertificates(cfg, req, db, ctx, nil, false, currentUser, 0, tv); err != nil {
 				dsExpInfo.Error = err
 				errorCount++
 			} else {
@@ -265,7 +260,7 @@ func RunAutorenewal(existingCerts []ExistingCerts, cfg *config.Config, ctx conte
 			} else {
 				// background httpCtx since this is run in a goroutine spawned off the original http request
 				// so the context isn't cancelled when the http connection is closed
-				userErr, sysErr, statusCode := renewAcmeCerts(cfg, keyObj.DeliveryService, ctx, context.Background(), currentUser, tv)
+				userErr, sysErr, statusCode := renewAcmeCerts(cfg, keyObj.DeliveryService, db, ctx, currentUser, tv)
 				if userErr != nil {
 					errorCount++
 					dsExpInfo.Error = userErr
