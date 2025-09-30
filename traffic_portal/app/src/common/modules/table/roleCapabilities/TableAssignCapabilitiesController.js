@@ -50,14 +50,27 @@ var TableAssignCapabilitiesController = function(role, capabilities, assignedCap
 
 	$scope.role = role;
 
+	// Reset selectedCapabilities completely
+	$scope.selectedCapabilities = [];
+	
+	// Create fresh capabilities array with proper state
 	$scope.selectedCapabilities = _.map(capabilities, function(c) {
+		// Create a fresh copy of the capability object
+		var freshCapability = {
+			name: c.name,
+			selected: false  // Start with false for all
+		};
+		
+		// Check if this capability is assigned
 		var isAssigned = _.find(assignedCapabilities, function(assignedCap) {
-			return assignedCap == c.name
+			return assignedCap == c.name;
 		});
+		
 		if (isAssigned) {
-			c['selected'] = true;
+			freshCapability.selected = true;
 		}
-		return c;
+		
+		return freshCapability;
 	});
 
 	$scope.selectAll = function($event) {
@@ -75,14 +88,45 @@ var TableAssignCapabilitiesController = function(role, capabilities, assignedCap
 
 	$scope.submit = function() {
 		var selectedCapabilityNames = _.pluck(selectedCapabilities, 'name');
+		// Clean up DataTable before closing
+		if ($.fn.DataTable.isDataTable('#assignCapabilitiesTable')) {
+			$('#assignCapabilitiesTable').DataTable().destroy();
+		}
 		$uibModalInstance.close(selectedCapabilityNames);
 	};
 
 	$scope.cancel = function () {
+		// Clean up DataTable before dismissing
+		if ($.fn.DataTable.isDataTable('#assignCapabilitiesTable')) {
+			$('#assignCapabilitiesTable').DataTable().destroy();
+		}
 		$uibModalInstance.dismiss('cancel');
 	};
 
 	angular.element(document).ready(function () {
+		// Clear any existing DataTable instance first
+		if ($.fn.DataTable.isDataTable('#assignCapabilitiesTable')) {
+			$('#assignCapabilitiesTable').DataTable().destroy();
+		}
+		
+		// Force update selectedCapabilities based on assignedCapabilities
+		$scope.selectedCapabilities = _.map(capabilities, function(c) {
+			var freshCapability = {
+				name: c.name,
+				selected: false
+			};
+			
+			var isAssigned = _.find(assignedCapabilities, function(assignedCap) {
+				return assignedCap == c.name;
+			});
+			
+			if (isAssigned) {
+				freshCapability.selected = true;
+			}
+			
+			return freshCapability;
+		});
+		
 		var assignCapabilitiesTable = $('#assignCapabilitiesTable').dataTable({
 			"scrollY": "60vh",
 			"paging": false,
@@ -92,11 +136,21 @@ var TableAssignCapabilitiesController = function(role, capabilities, assignedCap
 				{ 'orderable': false, 'targets': 0 },
 				{ "width": "5%", "targets": 0 }
 			],
-			"stateSave": false
+			"stateSave": false,
+			"destroy": true
 		});
 		assignCapabilitiesTable.on( 'search.dt', function () {
 			$("#selectAllCB").removeAttr("checked"); // uncheck the all box when filtering
 		} );
+		
+		// Force update checkboxes after DataTable is created
+		$scope.$apply(function() {
+			$scope.selectedCapabilities.forEach(function(capability) {
+				var checkbox = $('#assignCapabilitiesTable tr[id="' + capability.name + '"] input[type="checkbox"]');
+				checkbox.prop('checked', capability.selected);
+			});
+		});
+		
 		updateSelectedCount();
 	});
 

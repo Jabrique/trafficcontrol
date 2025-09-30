@@ -25,6 +25,7 @@ under the License.
         </ol>
         <div class="pull-right" role="group" ng-show="!settings.isNew">
             <button type="button" class="btn btn-primary" title="View Capabilities" ng-show="enforceCapabilities" ng-click="viewCapabilities()">View Capabilities</button>
+            <button type="button" class="btn btn-primary" title="Edit Permissions" ng-click="editPermissions()">Edit Permissions</button>
             <button type="button" class="btn btn-primary" title="View Users" ng-click="viewUsers()">View Users</button>
         </div>
         <div class="clearfix"></div>
@@ -52,7 +53,25 @@ under the License.
             <div class="form-group">
                 <label for="permissions" class="control-label col-md-2 col-sm-2 col-xs-12">Permissions</label>
                 <div class="col-md-10 col-sm-10 col-xs-12">
-                    <textarea name="permissions" id="permissions" class="form-control" ng-value="role.permissions.join('\n')" rows="10" readonly></textarea>
+                    <div ng-show="settings.isNew">
+                        <button type="button" class="btn btn-primary" ng-click="selectPermissions()" title="Select Permissions">
+                            <i class="fa fa-plus"></i> Select Permissions
+                        </button>
+                        <div ng-show="role.permissions && role.permissions.length > 0" style="margin-top: 10px;">
+                            <label>Selected Permissions:</label>
+                            <ul class="list-group" style="max-height: 200px; overflow-y: auto;">
+                                <li class="list-group-item" ng-repeat="permission in role.permissions">
+                                    {{permission}}
+                                    <button type="button" class="btn btn-xs btn-danger pull-right" ng-click="removePermission(permission)">
+                                        <i class="fa fa-times"></i>
+                                    </button>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div ng-show="!settings.isNew">
+                        <textarea name="permissions" id="permissions" class="form-control" ng-value="role.permissions.join('\n')" rows="10" readonly></textarea>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">

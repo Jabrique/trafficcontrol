@@ -24,8 +24,10 @@
  * @param {import("../../../../service/utils/LocationUtils")} locationUtils
  * @param {import("../../../../api/RoleService")} roleService
  * @param {import("../../../../models/MessageModel")} messageModel
+ * @param {import("angular").IModalService} $uibModal
+ * @param {import("../../../../api/CapabilityService")} capabilityService
  */
-var FormNewRoleController = function(roles, $scope, $controller, locationUtils, roleService, messageModel) {
+var FormNewRoleController = function(roles, $scope, $controller, locationUtils, roleService, messageModel, $uibModal, capabilityService) {
 
 	// extends the FormRoleController to inherit common methods
 	angular.extend(this, $controller('FormRoleController', { roles: roles, $scope: $scope }));
@@ -35,6 +37,37 @@ var FormNewRoleController = function(roles, $scope, $controller, locationUtils, 
 	$scope.settings = {
 		isNew: true,
 		saveLabel: 'Create'
+	};
+
+	// Initialize permissions array for new role
+	$scope.role.permissions = $scope.role.permissions || [];
+
+	$scope.selectPermissions = function() {
+		var modalInstance = $uibModal.open({
+			templateUrl: 'common/modules/table/roleCapabilities/table.assignCapabilities.tpl.html',
+			controller: 'TableAssignCapabilitiesController',
+			size: 'lg',
+			resolve: {
+				role: function() {
+					return $scope.role;
+				},
+				capabilities: function() {
+					return capabilityService.getCapabilities();
+				},
+				assignedCapabilities: function() {
+					return $scope.role.permissions || [];
+				}
+			}
+		});
+		modalInstance.result.then(function(selectedPermissions) {
+			$scope.role.permissions = selectedPermissions;
+		}, function () {
+			// do nothing
+		});
+	};
+
+	$scope.removePermission = function(permissionToRemove) {
+		$scope.role.permissions = $scope.role.permissions.filter(permission => permission !== permissionToRemove);
 	};
 
 	$scope.confirmSave = function(role) {
@@ -47,5 +80,5 @@ var FormNewRoleController = function(roles, $scope, $controller, locationUtils, 
 
 };
 
-FormNewRoleController.$inject = ['roles', '$scope', '$controller', 'locationUtils', 'roleService', 'messageModel'];
+FormNewRoleController.$inject = ['roles', '$scope', '$controller', 'locationUtils', 'roleService', 'messageModel', '$uibModal', 'capabilityService'];
 module.exports = FormNewRoleController;
