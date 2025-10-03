@@ -445,16 +445,23 @@ public class ZoneManager extends Resolver {
 	private static void generateZones(final TrafficRouter tr, final LoadingCache<ZoneKey, Zone> zc, final LoadingCache<ZoneKey, Zone> dzc,
 			final List<Runnable> generationTasks, final BlockingQueue<Runnable> primingTasks,
 			final ConcurrentMap<String, ZoneKey> newDomainsToZoneKeys) throws java.io.IOException {
-		final Map<String, DeliveryService> dsMap = getAllDeliveryServiceDomains(tr);
 		final CacheRegister data = tr.getCacheRegister();
-		final Map<String, List<Record>> zoneMap = new HashMap<>();
-		final Map<String, List<Record>> superDomains = populateZoneMap(zoneMap, dsMap, data);
-		final List<Record> superRecords = fillZones(zoneMap, dsMap, tr, zc, dzc, generationTasks, primingTasks, newDomainsToZoneKeys);
-		final List<Record> upstreamRecords = fillZones(superDomains, dsMap, tr, superRecords, zc, dzc, generationTasks, primingTasks, newDomainsToZoneKeys);
+		
+		// Check if this is multi-CDN mode
+		if (data.isMultiCDN()) {
+			generateMultiCDNZones(tr, zc, dzc, generationTasks, primingTasks, newDomainsToZoneKeys);
+		} else {
+			// Single CDN mode - existing logic
+			final Map<String, DeliveryService> dsMap = getAllDeliveryServiceDomains(tr);
+			final Map<String, List<Record>> zoneMap = new HashMap<>();
+			final Map<String, List<Record>> superDomains = populateZoneMap(zoneMap, dsMap, data);
+			final List<Record> superRecords = fillZones(zoneMap, dsMap, tr, zc, dzc, generationTasks, primingTasks, newDomainsToZoneKeys);
+			final List<Record> upstreamRecords = fillZones(superDomains, dsMap, tr, superRecords, zc, dzc, generationTasks, primingTasks, newDomainsToZoneKeys);
 
-		for (final Record record : upstreamRecords) {
-			if (record.getType() == Type.DS) {
-				LOGGER.info("Publish this DS record in the parent zone: " + record);
+			for (final Record record : upstreamRecords) {
+				if (record.getType() == Type.DS) {
+					LOGGER.info("Publish this DS record in the parent zone: " + record);
+				}
 			}
 		}
 	}
@@ -1245,5 +1252,123 @@ public class ZoneManager extends Resolver {
 	}
 	public static LoadingCache<ZoneKey, Zone> getDynamicZoneCache() {
 		return dynamicZoneCache;
+	}
+
+	/**
+	 * Generate zones for multi-CDN configuration
+	 */
+	@SuppressWarnings("PMD.ExcessiveParameterList")
+	private static void generateMultiCDNZones(final TrafficRouter tr, final LoadingCache<ZoneKey, Zone> zc, final LoadingCache<ZoneKey, Zone> dzc,
+			final List<Runnable> generationTasks, final BlockingQueue<Runnable> primingTasks,
+			final ConcurrentMap<String, ZoneKey> newDomainsToZoneKeys) throws java.io.IOException {
+		final CacheRegister data = tr.getCacheRegister();
+		
+		LOGGER.info("Generating zones for multi-CDN configuration");
+		
+		// Process each CDN separately
+		for (final String cdnName : data.getManagedCDNs()) {
+			LOGGER.info("Generating zones for CDN: " + cdnName);
+			
+			// Create a temporary TrafficRouter with CDN-specific config
+			final TrafficRouter cdnSpecificTR = createCDNSpecificTrafficRouter(tr, cdnName);
+			
+			// Generate zones for this specific CDN
+			final Map<String, DeliveryService> dsMap = getAllDeliveryServiceDomains(cdnSpecificTR);
+			final Map<String, List<Record>> zoneMap = new HashMap<>();
+			final Map<String, List<Record>> superDomains = populateZoneMap(zoneMap, dsMap, cdnSpecificTR.getCacheRegister());
+			final List<Record> superRecords = fillZones(zoneMap, dsMap, cdnSpecificTR, zc, dzc, generationTasks, primingTasks, newDomainsToZoneKeys);
+			final List<Record> upstreamRecords = fillZones(superDomains, dsMap, cdnSpecificTR, superRecords, zc, dzc, generationTasks, primingTasks, newDomainsToZoneKeys);
+
+			for (final Record record : upstreamRecords) {
+				if (record.getType() == Type.DS) {
+					LOGGER.info("Publish this DS record in the parent zone for CDN " + cdnName + ": " + record);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Create a CDN-specific TrafficRouter for zone generation
+	 * This is a simplified approach that just swaps the CacheRegister
+	 */
+	private static TrafficRouter createCDNSpecificTrafficRouter(final TrafficRouter originalTR, final String cdnName) throws IOException {
+		final CacheRegister originalRegister = originalTR.getCacheRegister();
+		final JsonNode cdnConfig = originalRegister.getCRConfigForCDN(cdnName);
+		
+		// Create a new CacheRegister with CDN-specific configuration
+		final CacheRegister cdnRegister = new CacheRegister();
+		
+		if (cdnConfig != null) {
+			configureCDNRegister(cdnRegister, cdnConfig);
+			copyOriginalData(cdnRegister, originalRegister);
+		}
+		
+		// Return a simple wrapper that delegates to original TR but with different CacheRegister
+		return new TrafficRouterWrapper(originalTR, cdnRegister);
+	}
+	
+	/**
+	 * Configure CDN-specific settings in the register
+	 */
+	private static void configureCDNRegister(final CacheRegister cdnRegister, final JsonNode cdnConfig) {
+		if (cdnConfig.has("config")) {
+			cdnRegister.setConfig(cdnConfig.get("config"));
+		}
+		if (cdnConfig.has("contentRouters")) {
+			cdnRegister.setTrafficRouters(cdnConfig.get("contentRouters"));
+		}
+		if (cdnConfig.has("stats")) {
+			cdnRegister.setStats(cdnConfig.get("stats"));
+		}
+	}
+	
+	/**
+	 * Copy necessary data from original register
+	 */
+	private static void copyOriginalData(final CacheRegister cdnRegister, final CacheRegister originalRegister) {
+		// Copy location and cache data
+		cdnRegister.setConfiguredLocations(originalRegister.getCacheLocations());
+		cdnRegister.setEdgeTrafficRouterLocations(originalRegister.getEdgeTrafficRouterLocations());
+		cdnRegister.setCacheMap(originalRegister.getCacheMap());
+		
+		// Copy delivery service data
+		if (originalRegister.getDeliveryServices() != null) {
+			cdnRegister.setDeliveryServiceMap(originalRegister.getDeliveryServices());
+		}
+		if (originalRegister.getFQDNToDeliveryServiceMap() != null) {
+			cdnRegister.setFQDNToDeliveryServiceMap(originalRegister.getFQDNToDeliveryServiceMap());
+		}
+	}
+
+	/**
+	 * Simple wrapper class for TrafficRouter with different CacheRegister
+	 */
+	private static class TrafficRouterWrapper extends TrafficRouter {
+		private final TrafficRouter delegate;
+		private final CacheRegister cdnRegister;
+		
+		public TrafficRouterWrapper(final TrafficRouter delegate, final CacheRegister cdnRegister) throws IOException {
+			super(cdnRegister, 
+				delegate.getGeolocationService(), 
+				delegate.getGeolocationService(), // Use same service for IPv6 (zone generation doesn't need separate IPv6 geolocation)
+				delegate.getAnonymousIpDatabaseService(), 
+				null, // StatTracker - not needed for zone generation
+				null, // TrafficOpsUtils - not needed for zone generation
+				null, // FederationRegistry - not needed for zone generation
+				null  // TrafficRouterManager - not needed for zone generation
+			);
+			this.delegate = delegate;
+			this.cdnRegister = cdnRegister;
+		}
+		
+		@Override
+		public CacheRegister getCacheRegister() {
+			return cdnRegister;
+		}
+		
+		@Override
+		public boolean isDnssecEnabled() {
+			return delegate.isDnssecEnabled();
+		}
 	}
 }

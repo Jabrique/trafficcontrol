@@ -20,6 +20,7 @@
 package datareq
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -28,12 +29,71 @@ import (
 )
 
 func srvTRConfig(opsConfig threadsafe.OpsConfig, toSession towrap.TrafficOpsSessionThreadsafe) ([]byte, time.Time, error) {
-	cdnName := opsConfig.Get().CdnName
+	config := opsConfig.Get()
 	if !toSession.Initialized() {
 		return nil, time.Time{}, fmt.Errorf("Unable to connect to Traffic Ops")
 	}
-	if cdnName == "" {
+	if config.CdnName == "" {
 		return nil, time.Time{}, fmt.Errorf("No CDN Configured")
 	}
-	return toSession.LastCRConfig(cdnName)
+
+	// Check if multiple CDNs are managed
+	if len(config.ManagedCdns) > 1 {
+		// Return multi-CDN response
+		return srvMultiCDNCRConfig(opsConfig, toSession)
+	}
+
+	// Single CDN response (backward compatibility)
+	return toSession.LastCRConfig(config.CdnName)
+}
+
+// srvMultiCDNCRConfig returns CRConfig for multiple CDNs in array format
+func srvMultiCDNCRConfig(opsConfig threadsafe.OpsConfig, toSession towrap.TrafficOpsSessionThreadsafe) ([]byte, time.Time, error) {
+	config := opsConfig.Get()
+	response := map[string]interface{}{
+		"cdnConfigs": []map[string]interface{}{},
+	}
+	
+	var latestTime time.Time
+	
+	// Get CRConfig for each managed CDN
+	for _, cdnName := range config.ManagedCdns {
+		if cdnName == "" {
+			continue
+		}
+		
+		crconfig, configTime, err := toSession.LastCRConfig(cdnName)
+		if err != nil {
+			// Log error but continue with other CDNs
+			fmt.Printf("Error getting CRConfig for CDN '%s': %v\n", cdnName, err)
+			continue
+		}
+		
+		// Track latest modification time
+		if configTime.After(latestTime) {
+			latestTime = configTime
+		}
+		
+		// Parse CRConfig JSON
+		var crconfigObj interface{}
+		if err := json.Unmarshal(crconfig, &crconfigObj); err != nil {
+			fmt.Printf("Error parsing CRConfig for CDN '%s': %v\n", cdnName, err)
+			continue
+		}
+		
+		// Add to response
+		cdnConfig := map[string]interface{}{
+			"cdnName": cdnName,
+			"crconfig": crconfigObj,
+		}
+		response["cdnConfigs"] = append(response["cdnConfigs"].([]map[string]interface{}), cdnConfig)
+	}
+	
+	// Marshal response
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("Error marshaling multi-CDN CRConfig response: %v", err)
+	}
+	
+	return responseBytes, latestTime, nil
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/apache/trafficcontrol/v8/lib/go-rfc"
 	"github.com/apache/trafficcontrol/v8/lib/go-tc"
 	"github.com/apache/trafficcontrol/v8/lib/go-util"
+	"github.com/apache/trafficcontrol/v8/traffic_ops/toclientlib"
 )
 
 const TrafficOpsProxyParameterName = `tm.rev_proxy.url`
@@ -303,15 +304,22 @@ func GetConfigData(toClient *toreq.TOClient, disableProxy bool, cacheHostName st
 			defer func(start time.Time) { log.Infof("sslF took %v\n", time.Since(start)) }(time.Now())
 
 			{
+				// Get shared CDN names from server parameters
+				sharedCDNNames := getSharedCDNsFromServerParams(server, serverProfilesParams)
+				if len(sharedCDNNames) > 0 {
+					log.Infof("Server %s shared with CDNs: %v", server.HostName, sharedCDNNames)
+				}
 
 				reqHdr := (http.Header)(nil)
 				if oldCfg != nil && oldServer.CDN != "" && oldServer.CDN == server.CDN {
 					reqHdr = MakeReqHdr(oldCfg.MetaData.SSLKeys)
 				}
-				keys, reqInf, err := toClient.GetCDNSSLKeys(tc.CDNName(server.CDN), reqHdr)
-				log.Infoln(toreq.RequestInfoStr(reqInf, "GetCDNSSLKeys("+server.CDN+")"))
+
+				// Enhanced SSL key collection from multiple CDNs
+				keys, reqInf, err := getSharedCDNSSLKeys(toClient, server.CDN, sharedCDNNames, reqHdr)
+				log.Infoln(toreq.RequestInfoStr(reqInf, "GetSharedCDNSSLKeys("+server.CDN+")"))
 				if err != nil {
-					return errors.New("getting cdn '" + server.CDN + "': " + err.Error())
+					return errors.New("getting ssl keys for cdn '" + server.CDN + "' and shared CDNs: " + err.Error())
 				}
 
 				if reqInf.StatusCode == http.StatusNotModified {
@@ -330,14 +338,19 @@ func GetConfigData(toClient *toreq.TOClient, disableProxy bool, cacheHostName st
 			defer func(start time.Time) { log.Infof("dsF took %v\n", time.Since(start)) }(time.Now())
 
 			{
+				// Get shared CDN names from server parameters
+				sharedCDNNames := getSharedCDNsFromServerParams(server, serverProfilesParams)
+
 				reqHdr := (http.Header)(nil)
 				if oldCfg != nil && oldServer.CDN != "" && oldServer.CDN == server.CDN {
 					reqHdr = MakeReqHdr(oldCfg.MetaData.DeliveryServices)
 				}
-				dses, reqInf, err := toClient.GetCDNDeliveryServices(server.CDNID, reqHdr)
-				log.Infoln(toreq.RequestInfoStr(reqInf, "GetCDNDeliveryServices("+strconv.Itoa(server.CDNID)+")"))
+
+				// Enhanced delivery service collection from multiple CDNs
+				dses, reqInf, err := getSharedCDNDeliveryServices(toClient, server.CDNID, sharedCDNNames, reqHdr)
+				log.Infoln(toreq.RequestInfoStr(reqInf, "GetSharedCDNDeliveryServices("+strconv.Itoa(server.CDNID)+")"))
 				if err != nil {
-					return errors.New("getting delivery services: " + err.Error())
+					return errors.New("getting delivery services for cdn and shared CDNs: " + err.Error())
 				}
 
 				if reqInf.StatusCode == http.StatusNotModified {
@@ -989,4 +1002,105 @@ func filterUnusedDSS(dsses []tc.DeliveryServiceServerV5, cdnID int, servers []at
 		cfgDSS = append(cfgDSS, atscfg.DeliveryServiceServer{Server: *dss.Server, DeliveryService: *dss.DeliveryService})
 	}
 	return cfgDSS
+}
+
+// getSharedCDNsFromServerParams extracts shared CDN names from server parameters
+func getSharedCDNsFromServerParams(server *atscfg.Server, serverProfilesParams *sync.Map) []string {
+	for _, profile := range server.Profiles {
+		if paramsInterface, ok := serverProfilesParams.Load(profile); ok {
+			if params, ok := paramsInterface.([]tc.ParameterV5); ok {
+				for _, param := range params {
+					if param.Name == "server.cdn.sharing" && param.ConfigFile == "server.config" && param.Value != "" {
+						sharedCDNs := strings.Split(param.Value, ",")
+						// Trim whitespace from each CDN name
+						for i, cdn := range sharedCDNs {
+							sharedCDNs[i] = strings.TrimSpace(cdn)
+						}
+						return sharedCDNs
+					}
+				}
+			}
+		}
+	}
+	return []string{}
+}
+
+// getSharedCDNDeliveryServices collects delivery services from primary and shared CDNs
+func getSharedCDNDeliveryServices(toClient *toreq.TOClient, primaryCDNID int, sharedCDNNames []string, reqHdr http.Header) ([]atscfg.DeliveryService, toclientlib.ReqInf, error) {
+	allDeliveryServices := []atscfg.DeliveryService{}
+	var lastReqInf toclientlib.ReqInf
+	
+	// Primary CDN DS
+	primaryDSes, reqInf, err := toClient.GetCDNDeliveryServices(primaryCDNID, reqHdr)
+	lastReqInf = reqInf
+	if err != nil {
+		return nil, reqInf, err
+	}
+	allDeliveryServices = append(allDeliveryServices, primaryDSes...)
+	log.Infof("Added %d DS from primary CDN (ID: %d)", len(primaryDSes), primaryCDNID)
+	
+	// Dynamic shared CDN DS collection
+	for _, sharedCDNName := range sharedCDNNames {
+		if sharedCDNName == "" {
+			continue
+		}
+		
+		// Dynamic CDN lookup by name
+		sharedCDN, _, err := toClient.GetCDN(tc.CDNName(sharedCDNName), reqHdr)
+		if err != nil {
+			log.Warnf("Shared CDN '%s' not found: %v (skipping)", sharedCDNName, err)
+			continue
+		}
+		
+		if sharedCDN.ID == primaryCDNID {
+			log.Warnf("Shared CDN '%s' is same as primary CDN (skipping duplicate)", sharedCDNName)
+			continue
+		}
+		
+		sharedDSes, _, err := toClient.GetCDNDeliveryServices(sharedCDN.ID, reqHdr)
+		if err != nil {
+			log.Warnf("Error getting DS for shared CDN '%s': %v (skipping)", sharedCDNName, err)
+			continue
+		}
+		
+		log.Infof("Added %d DS from shared CDN '%s' (ID: %d)", len(sharedDSes), sharedCDNName, sharedCDN.ID)
+		allDeliveryServices = append(allDeliveryServices, sharedDSes...)
+	}
+	
+	log.Infof("Total DS collected: %d", len(allDeliveryServices))
+	return allDeliveryServices, lastReqInf, nil
+}
+
+// getSharedCDNSSLKeys collects SSL keys from primary and shared CDNs
+func getSharedCDNSSLKeys(toClient *toreq.TOClient, primaryCDNName string, sharedCDNNames []string, reqHdr http.Header) ([]tc.CDNSSLKeys, toclientlib.ReqInf, error) {
+	allSSLKeys := []tc.CDNSSLKeys{}
+	var lastReqInf toclientlib.ReqInf
+	
+	// Primary CDN SSL keys
+	primaryKeys, reqInf, err := toClient.GetCDNSSLKeys(tc.CDNName(primaryCDNName), reqHdr)
+	lastReqInf = reqInf
+	if err != nil {
+		return nil, reqInf, err
+	}
+	allSSLKeys = append(allSSLKeys, primaryKeys...)
+	log.Infof("Added %d SSL keys from primary CDN '%s'", len(primaryKeys), primaryCDNName)
+	
+	// Shared CDN SSL keys
+	for _, sharedCDNName := range sharedCDNNames {
+		if sharedCDNName == "" || sharedCDNName == primaryCDNName {
+			continue
+		}
+		
+		sharedKeys, _, err := toClient.GetCDNSSLKeys(tc.CDNName(sharedCDNName), reqHdr)
+		if err != nil {
+			log.Warnf("Error getting SSL keys for shared CDN '%s': %v (skipping)", sharedCDNName, err)
+			continue
+		}
+		
+		log.Infof("Added %d SSL keys from shared CDN '%s'", len(sharedKeys), sharedCDNName)
+		allSSLKeys = append(allSSLKeys, sharedKeys...)
+	}
+	
+	log.Infof("Total SSL keys collected: %d", len(allSSLKeys))
+	return allSSLKeys, lastReqInf, nil
 }

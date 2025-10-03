@@ -35,6 +35,10 @@ const (
 type OpsConfig struct {
 	// The name of the CDN to which this Traffic Monitor belongs.
 	CdnName string `json:"cdnName"`
+	// The primary CDN name (for backward compatibility, same as CdnName)
+	PrimaryCdnName string `json:"primaryCdnName"`
+	// List of CDNs managed by this Traffic Monitor (includes primary CDN)
+	ManagedCdns []string `json:"managedCdns"`
 	// The path to an SSL certificate to use with KeyFile to provide HTTP
 	// encryption for the TM API and web UI.
 	CertFile string `json:"certFile"`

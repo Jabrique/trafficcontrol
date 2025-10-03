@@ -110,6 +110,12 @@ func getAllServers(cdn string, tx *sql.Tx) (map[string]ServerUnion, error) {
 		return nil, errors.New("Error getting server params: " + err.Error())
 	}
 
+	// Pre-fetch target CDN domain to avoid transaction conflict
+	targetCDNDomain, err := getCDNDomain(cdn, tx)
+	if err != nil {
+		return nil, errors.New("Error getting target CDN domain: " + err.Error())
+	}
+
 	// TODO select deliveryservices as array?
 	q := `
 	SELECT
@@ -126,13 +132,20 @@ func getAllServers(cdn string, tx *sql.Tx) (map[string]ServerUnion, error) {
 		t.name AS type,
 		(SELECT ARRAY_AGG(server_capability ORDER BY server_capability)
 			FROM server_server_capability
-			WHERE server = s.id) AS capabilities
+			WHERE server = s.id) AS capabilities,
+		cdn.name as server_cdn,
+		cdn.domain_name as server_domain,
+		COALESCE(param.value, '') as shared_cdns
 	FROM server AS s
 	INNER JOIN cachegroup AS cg ON cg.id = s.cachegroup
 	INNER JOIN type AS t on t.id = s.type
 	INNER JOIN profile AS p ON p.id = s.profile
 	INNER JOIN status AS st ON st.id = s.status
-	WHERE cdn_id = (SELECT id FROM cdn WHERE name = $1)
+	INNER JOIN cdn ON cdn.id = s.cdn_id
+	LEFT JOIN profile_parameter pp ON pp.profile = s.profile
+	LEFT JOIN parameter param ON param.id = pp.parameter AND param.name = 'server.cdn.sharing' AND param.config_file = 'server.config'
+	WHERE (s.cdn_id = (SELECT id FROM cdn WHERE name = $1)
+	       OR (param.value IS NOT NULL AND param.value != '' AND $1 = ANY(string_to_array(param.value, ','))))
 	AND (st.name = 'REPORTED' OR st.name = 'ONLINE' OR st.name = 'ADMIN_DOWN')
 	`
 	rows, err := tx.Query(q, cdn)
@@ -147,13 +160,21 @@ func getAllServers(cdn string, tx *sql.Tx) (map[string]ServerUnion, error) {
 		var port sql.NullInt64
 		var hashId sql.NullString
 		var httpsPort sql.NullInt64
+		var serverCDN, serverDomain, sharedCDNs string
 
 		var s ServerAndHost
 
 		var status string
 		var id int
-		if err := rows.Scan(&id, &s.Host, &s.Server.CacheGroup, &s.Server.Fqdn, &hashId, &httpsPort, &port, &s.Server.Profile, &s.Server.RoutingDisabled, &status, &s.Server.ServerType, pq.Array(&s.Server.Capabilities)); err != nil {
+		if err := rows.Scan(&id, &s.Host, &s.Server.CacheGroup, &s.Server.Fqdn, &hashId, &httpsPort, &port, &s.Server.Profile, &s.Server.RoutingDisabled, &status, &s.Server.ServerType, pq.Array(&s.Server.Capabilities), &serverCDN, &serverDomain, &sharedCDNs); err != nil {
 			return nil, errors.New("Error scanning server: " + err.Error())
+		}
+
+		// Adjust FQDN for shared servers if needed
+		if serverCDN != cdn && sharedCDNs != "" {
+			// Replace server domain with target CDN domain
+			newFqdn := s.Host + "." + targetCDNDomain
+			s.Server.Fqdn = &newFqdn
 		}
 
 		ids = append(ids, id)
@@ -438,4 +459,16 @@ func getGlobalParam(tx *sql.Tx, name string) (string, bool, error) {
 		return "", false, errors.New("querying global parameter '" + name + "': " + err.Error())
 	}
 	return val, true, nil
+}
+
+// getCDNDomain returns the domain name for the specified CDN
+func getCDNDomain(cdnName string, tx *sql.Tx) (string, error) {
+	var domain string
+	if err := tx.QueryRow(`SELECT domain_name FROM cdn WHERE name = $1`, cdnName).Scan(&domain); err != nil {
+		if err == sql.ErrNoRows {
+			return "", errors.New("CDN '" + cdnName + "' not found")
+		}
+		return "", errors.New("querying CDN domain for '" + cdnName + "': " + err.Error())
+	}
+	return domain, nil
 }

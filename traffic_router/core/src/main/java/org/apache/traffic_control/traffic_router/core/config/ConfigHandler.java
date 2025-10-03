@@ -183,7 +183,16 @@ public class ConfigHandler {
 				final CacheRegister cacheRegister = new CacheRegister();
 				final JsonNode deliveryServicesJson = JsonUtils.getJsonNode(jo, deliveryServicesKey);
 				cacheRegister.setTrafficRouters(JsonUtils.getJsonNode(jo, "contentRouters"));
-				cacheRegister.setConfig(config);
+				
+				// Check if this is multi-CDN configuration from Traffic Monitor
+				if (jo.has("cdnConfigs")) {
+					LOGGER.info("Processing multi-CDN configuration from Traffic Monitor");
+					cacheRegister.setConfig(jo); // Pass the entire JSON with cdnConfigs array
+				} else {
+					LOGGER.info("Processing single CDN configuration");
+					cacheRegister.setConfig(config);
+				}
+				
 				cacheRegister.setStats(stats);
 				parseTrafficOpsConfig(config, stats);
 
