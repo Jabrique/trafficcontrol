@@ -29,8 +29,9 @@
  * @param {import("../../../../api/RoleService")} roleService
  * @param {import("../../../../models/MessageModel")} messageModel
  * @param {import("../../../../models/PropertiesModel")} propertiesModel
+ * @param {import("../../../../api/CapabilityService")} capabilityService
  */
-var FormEditRoleController = function(roles, $scope, $controller, $uibModal, $anchorScroll, $location, locationUtils, roleService, messageModel, propertiesModel) {
+var FormEditRoleController = function(roles, $scope, $controller, $uibModal, $anchorScroll, $location, locationUtils, roleService, messageModel, propertiesModel, capabilityService) {
 
 	// extends the FormRoleController to inherit common methods
 	angular.extend(this, $controller('FormRoleController', { roles: roles, $scope: $scope }));
@@ -63,6 +64,37 @@ var FormEditRoleController = function(roles, $scope, $controller, $uibModal, $an
 
 	$scope.viewCapabilities = function() {
 		$location.path($location.path() + '/capabilities');
+	};
+
+	$scope.editPermissions = function() {
+		// Get all available capabilities
+		capabilityService.getCapabilities().then(function(capabilities) {
+			var modalInstance = $uibModal.open({
+				templateUrl: 'common/modules/table/roleCapabilities/table.assignCapabilities.tpl.html',
+				controller: 'TableAssignCapabilitiesController',
+				size: 'lg',
+				resolve: {
+					role: function() {
+						return $scope.role;
+					},
+					capabilities: function() {
+						return capabilities;
+					},
+					assignedCapabilities: function() {
+						return $scope.role.permissions || [];
+					}
+				}
+			});
+
+			modalInstance.result.then(function(selectedCapabilities) {
+				// Update role permissions
+				$scope.role.permissions = selectedCapabilities;
+				// Mark form as dirty to enable save button
+				$scope.roleForm.$setDirty();
+			}, function() {
+				// Modal dismissed, do nothing
+			});
+		});
 	};
 
 	$scope.viewUsers = function() {
@@ -116,5 +148,5 @@ var FormEditRoleController = function(roles, $scope, $controller, $uibModal, $an
 
 };
 
-FormEditRoleController.$inject = ['roles', '$scope', '$controller', '$uibModal', '$anchorScroll', '$location', 'locationUtils', 'roleService', 'messageModel', 'propertiesModel'];
+FormEditRoleController.$inject = ['roles', '$scope', '$controller', '$uibModal', '$anchorScroll', '$location', 'locationUtils', 'roleService', 'messageModel', 'propertiesModel', 'capabilityService'];
 module.exports = FormEditRoleController;
