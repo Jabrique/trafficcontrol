@@ -17,10 +17,11 @@ package org.apache.traffic_control.traffic_router.api.controllers;
 
 import org.apache.traffic_control.traffic_router.core.util.DataExporter;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseBody;
 
 import java.util.HashMap;
 import java.util.List;
@@ -42,7 +43,7 @@ public class EdgeRouterStateController {
 	private DataExporter dataExporter;
 
 	@GetMapping
-	public @ResponseBody Map<String, Object> getEdgeRouterStates() {
+	public ResponseEntity<Map<String, Object>> getEdgeRouterStates() {
 		final Map<String, Object> response = new HashMap<>();
 		final List<Map<String, Object>> states = dataExporter.getEdgeRouterStates();
 		response.put("edgeRouters", states);
@@ -52,6 +53,8 @@ public class EdgeRouterStateController {
 				.count();
 		response.put("includedInRoutingCount", availableCount);
 		response.put("excludedFromRoutingCount", states.size() - availableCount);
-		return response;
+		return ResponseEntity.ok()
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(response);
 	}
 }
