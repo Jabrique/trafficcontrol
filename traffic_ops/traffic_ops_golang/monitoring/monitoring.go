@@ -113,6 +113,7 @@ type Monitoring struct {
 	DeliveryServices []DeliveryService              `json:"deliveryServices"`
 	Config           map[string]interface{}         `json:"config"`
 	Topologies       map[string]tc.CRConfigTopology `json:"topologies"`
+	TrafficRouters   []Router                       `json:"trafficRouters,omitempty"`
 }
 
 // LegacyMonitoringResponse represents MontiroingResponse for ATC versions before 5.0.
@@ -125,8 +126,8 @@ type MonitoringResponse struct {
 }
 
 type Router struct {
-	Type    string
-	Profile string
+	BasicServer
+	Type string `json:"type"`
 }
 
 type DeliveryService struct {
@@ -177,6 +178,7 @@ func GetMonitoringJSON(tx *sql.Tx, cdnName string) (*Monitoring, error) {
 		DeliveryServices: deliveryServices,
 		Config:           config,
 		Topologies:       topologies,
+		TrafficRouters:   routers,
 	}, nil
 }
 
@@ -385,9 +387,45 @@ AND cdn.name = $3
 			}
 			caches = append(caches, cache)
 		} else if ttype.String == tc.RouterTypeName {
+			var ipStr, ipStr6 string
+			var gotBothIPs bool
+			if _, ok := interfacesByNameAndServer[int(serverID.Int64)]; ok {
+				for _, interf := range interfacesByNameAndServer[int(serverID.Int64)] {
+					for _, ipAddress := range interf.IPAddresses {
+						ipAddress.Address = strings.Split(ipAddress.Address, "/")[0]
+						ip := net.ParseIP(ipAddress.Address)
+						if ip == nil {
+							continue
+						}
+						if ipStr == "" && ip.To4() != nil {
+							ipStr = ipAddress.Address
+						} else if ipStr6 == "" && ip.To16() != nil {
+							ipStr6 = ipAddress.Address
+						}
+						if ipStr != "" && ipStr6 != "" {
+							gotBothIPs = true
+							break
+						}
+					}
+					if gotBothIPs {
+						break
+					}
+				}
+			}
 			routers = append(routers, Router{
-				Type:    ttype.String,
-				Profile: profile.String,
+				BasicServer: BasicServer{
+					CommonServerProperties: CommonServerProperties{
+						Profile:    profile.String,
+						Status:     status.String,
+						Port:       int(port.Int64),
+						Cachegroup: cachegroup.String,
+						HostName:   hostName.String,
+						FQDN:       fqdn.String,
+					},
+					IP:  ipStr,
+					IP6: ipStr6,
+				},
+				Type: ttype.String,
 			})
 		}
 	}
@@ -433,15 +471,22 @@ func getProfiles(tx *sql.Tx, caches []Cache, routers []Router) ([]Profile, error
 	profiles := map[string]Profile{}
 	profileNames := []string{}
 	profileTypes := map[string]string{}
+	seenProfiles := map[string]bool{}
 	for _, router := range routers {
-		profileNames = append(profileNames, router.Profile)
-		profileTypes[router.Profile] = router.Type
+		if !seenProfiles[router.Profile] {
+			seenProfiles[router.Profile] = true
+			profileNames = append(profileNames, router.Profile)
+			profileTypes[router.Profile] = router.Type
+		}
 	}
 
 	for _, cache := range caches {
 		if _, ok := cacheProfileTypes[cache.Profile]; !ok {
 			cacheProfileTypes[cache.Profile] = cache.Type
-			profileNames = append(profileNames, cache.Profile)
+			if !seenProfiles[cache.Profile] {
+				seenProfiles[cache.Profile] = true
+				profileNames = append(profileNames, cache.Profile)
+			}
 			profileTypes[cache.Profile] = cache.Type
 		}
 	}
