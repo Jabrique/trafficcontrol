@@ -36,6 +36,7 @@ import org.apache.traffic_control.traffic_router.core.edge.CacheLocation;
 import org.apache.traffic_control.traffic_router.core.edge.CacheRegister;
 import org.apache.traffic_control.traffic_router.core.edge.InetRecord;
 import org.apache.traffic_control.traffic_router.core.edge.Location;
+import org.apache.traffic_control.traffic_router.core.edge.Node;
 import org.apache.traffic_control.traffic_router.core.edge.PropertiesAndCaches;
 import org.apache.traffic_control.traffic_router.core.loc.NetworkNode;
 import org.apache.traffic_control.traffic_router.core.loc.NetworkNodeException;
@@ -270,6 +271,50 @@ public class DataExporter {
 		cacheStatsMap.put("totalLoadTime", cacheStats.totalLoadTime());
 		cacheStatsMap.put("averageLoadPenalty", cacheStats.averageLoadPenalty());
 		return cacheStatsMap;
+	}
+
+	/**
+	 * Returns the state of all edge Traffic Routers as seen by this TR instance.
+	 * Uses descriptive field names: "monitorHasReported" instead of "hasAuthority"
+	 * to clearly indicate whether Traffic Monitor has reported state for each TR.
+	 */
+	public List<Map<String, Object>> getEdgeRouterStates() {
+		final List<Map<String, Object>> result = new ArrayList<>();
+		final TrafficRouter trafficRouter = trafficRouterManager.getTrafficRouter();
+		if (trafficRouter == null || trafficRouter.getCacheRegister() == null) {
+			return result;
+		}
+
+		final List<Node> edgeTRs = trafficRouter.getCacheRegister().getAllEdgeTrafficRouters();
+		if (edgeTRs == null) {
+			return result;
+		}
+
+		for (final Node tr : edgeTRs) {
+			final Map<String, Object> state = new HashMap<>();
+			state.put("id", tr.getId());
+			state.put("fqdn", tr.getFqdn());
+			state.put("monitorHasReported", tr.hasAuthority());
+			state.put("available", tr.isAvailable());
+			// Show per-protocol availability only when TM has reported,
+			// otherwise these values are meaningless defaults
+			if (tr.hasAuthority()) {
+				state.put("ipv4Available", tr.isAvailable(Node.IPVersions.IPV4ONLY));
+				state.put("ipv6Available", tr.isAvailable(Node.IPVersions.IPV6ONLY));
+			}
+
+			if (!tr.hasAuthority()) {
+				state.put("includedInRouting", true);
+				state.put("reason", "fail-open: Traffic Monitor has not reported state yet");
+			} else {
+				state.put("includedInRouting", tr.isAvailable());
+				state.put("reason", tr.isAvailable() ? "Traffic Monitor reports healthy" : "Traffic Monitor reports unavailable");
+			}
+
+			result.add(state);
+		}
+
+		return result;
 	}
 
 	public void setFederationExporter(final FederationExporter federationExporter) {

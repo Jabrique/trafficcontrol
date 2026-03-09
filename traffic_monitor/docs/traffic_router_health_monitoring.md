@@ -165,6 +165,61 @@ Returns router health status summary:
 
 Returns system health metrics (see Configuration section above).
 
+#### `GET /crs/edge-router-states`
+
+Returns the availability state of all known edge Traffic Routers **as seen by this TR instance**. Use this to verify that the health filter is working correctly.
+
+```json
+{
+  "totalCount": 3,
+  "includedInRoutingCount": 2,
+  "excludedFromRoutingCount": 1,
+  "edgeRouters": [
+    {
+      "id": "tr-edge-01",
+      "fqdn": "tr-edge-01.cdn.example.com",
+      "monitorHasReported": true,
+      "available": true,
+      "ipv4Available": true,
+      "ipv6Available": true,
+      "includedInRouting": true,
+      "reason": "Traffic Monitor reports healthy"
+    },
+    {
+      "id": "tr-edge-02",
+      "fqdn": "tr-edge-02.cdn.example.com",
+      "monitorHasReported": true,
+      "available": false,
+      "ipv4Available": false,
+      "ipv6Available": false,
+      "includedInRouting": false,
+      "reason": "Traffic Monitor reports unavailable"
+    },
+    {
+      "id": "tr-edge-03",
+      "fqdn": "tr-edge-03.cdn.example.com",
+      "monitorHasReported": false,
+      "available": false,
+      "includedInRouting": true,
+      "reason": "fail-open: Traffic Monitor has not reported state yet"
+    }
+  ]
+}
+```
+
+**Fields:**
+
+| Field | Description |
+|-------|-------------|
+| `monitorHasReported` | `true` if TM has ever sent a health state for this TR. `false` during startup or when using an older TM without router monitoring. |
+| `available` | Raw `isAvailable` value as reported by TM. Meaningless if `monitorHasReported=false`. |
+| `ipv4Available` | IPv4-specific availability. Only present when `monitorHasReported=true`. |
+| `ipv6Available` | IPv6-specific availability. Only present when `monitorHasReported=true`. |
+| `includedInRouting` | Whether this TR is actually included in routing decisions. When `monitorHasReported=false`, this is always `true` (fail-open). |
+| `reason` | Human-readable explanation for the `includedInRouting` value. |
+
+**Cross-referencing with TM:** Compare this output against `GET /api/router-statuses` on Traffic Monitor. Both should reflect the same availability state once TM has reported.
+
 ---
 
 ## Health Evaluation Logic
@@ -217,16 +272,17 @@ if (routerStates != null) {
 
 ### Edge TR Filtering
 
-When edge routing is enabled, `selectTrafficRoutersLocalized()` now filters unavailable edge TRs:
+When edge routing is enabled, `selectTrafficRoutersLocalized()` now filters unavailable edge TRs using the same fail-open pattern as cache routing:
 
 ```java
-// Skip unavailable edge Traffic Routers
-if (!trafficRouter.isAvailable()) {
-    continue;
+// Fail-open: include TR if TM hasn't reported yet (!hasAuthority)
+// OR if TM reports it as available
+if (!tr.hasAuthority() || tr.isAvailable()) {
+    trafficRouters.add(tr);
 }
 ```
 
-This ensures clients are only routed to healthy, available edge TRs.
+This ensures clients are only routed to healthy, available edge TRs — while preserving fail-open behavior during startup or when TM has not yet reported state.
 
 ---
 
@@ -240,6 +296,7 @@ This ensures clients are only routed to healthy, available edge TRs.
 | `traffic_monitor/health/routerhandler.go` | `RouterHandler` — parses `/crs/health` JSON |
 | `traffic_monitor/datareq/routerstate.go` | `/api/router-statuses` endpoint |
 | `traffic_router/.../HealthController.java` | `/crs/health` Spring endpoint |
+| `traffic_router/.../EdgeRouterStateController.java` | `/crs/edge-router-states` observability endpoint |
 
 ### Modified Files
 
@@ -258,7 +315,8 @@ This ensures clients are only routed to healthy, available edge TRs.
 | `traffic_monitor/datareq/datareq.go` | Registered `/api/router-statuses` endpoint |
 | `traffic_monitor/static/index.html` | Added "Router States" tab |
 | `traffic_monitor/static/script.js` | Added `getRouterStates()` for UI updates |
-| `traffic_router/.../TrafficRouter.java` | Consume router states, filter unavailable edge TRs |
+| `traffic_router/.../TrafficRouter.java` | Consume router states, filter unavailable edge TRs with fail-open |
+| `traffic_router/.../DataExporter.java` | Added `getEdgeRouterStates()` for `/crs/edge-router-states` |
 
 ---
 
@@ -316,7 +374,8 @@ go test -mod=mod ./traffic_monitor/... ./lib/go-tc/
 3. **Deploy Traffic Monitor** with router monitoring — starts polling TRs automatically
 4. **Verify** via TM UI: check "Router States" tab shows TR health
 5. **Verify** via API: `GET /publish/CrStates` includes `"routers"` field
-6. **(Optional) Deploy Traffic Router** with CRStates consumption — filters unavailable edge TRs
+6. **Verify** filter is working: `GET http://<tr-host>:3333/crs/edge-router-states` — check `includedInRouting` and `monitorHasReported` fields
+7. **(Optional) Deploy Traffic Router** with CRStates consumption — filters unavailable edge TRs
 
 ### Rollback
 
