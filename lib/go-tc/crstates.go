@@ -24,10 +24,11 @@ import (
 	"time"
 )
 
-// CRStates includes availability data for caches and delivery services, as gathered and aggregated by this Traffic Monitor. It is designed to be served at an API endpoint primarily for Traffic Routers (Content Router) to consume.
+// CRStates includes availability data for caches, delivery services, and routers as gathered and aggregated by this Traffic Monitor. It is designed to be served at an API endpoint primarily for Traffic Routers (Content Router) to consume.
 type CRStates struct {
 	Caches          map[CacheName]IsAvailable                       `json:"caches"`
 	DeliveryService map[DeliveryServiceName]CRStatesDeliveryService `json:"deliveryServices"`
+	Routers         map[RouterName]IsAvailable                      `json:"routers,omitempty"`
 }
 
 // CRStatesDeliveryService contains data about the availability of a particular delivery service, and which caches in that delivery service have been marked as unavailable.
@@ -51,6 +52,7 @@ func NewCRStates(cacheCap, dsCap int) CRStates {
 	return CRStates{
 		Caches:          make(map[CacheName]IsAvailable, cacheCap),
 		DeliveryService: make(map[DeliveryServiceName]CRStatesDeliveryService, dsCap),
+		Routers:         make(map[RouterName]IsAvailable),
 	}
 }
 
@@ -62,6 +64,9 @@ func (a CRStates) Copy() CRStates {
 	}
 	for k, v := range a.DeliveryService {
 		b.DeliveryService[k] = v
+	}
+	for k, v := range a.Routers {
+		b.Routers[k] = v
 	}
 	return b
 }
@@ -79,6 +84,18 @@ func (a CRStates) CopyDeliveryServices() map[DeliveryServiceName]CRStatesDeliver
 func (a CRStates) CopyCaches() map[CacheName]IsAvailable {
 	b := make(map[CacheName]IsAvailable, len(a.Caches))
 	for k, v := range a.Caches {
+		b[k] = v
+	}
+	return b
+}
+
+// CopyRouters creates a deep copy of the router availability data. It does not mutate, and is thus safe for multiple goroutines.
+func (a CRStates) CopyRouters() map[RouterName]IsAvailable {
+	if a.Routers == nil {
+		return nil
+	}
+	b := make(map[RouterName]IsAvailable, len(a.Routers))
+	for k, v := range a.Routers {
 		b[k] = v
 	}
 	return b
