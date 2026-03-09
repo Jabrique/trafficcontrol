@@ -49,6 +49,14 @@ func (c CacheName) String() string {
 	return string(c)
 }
 
+// RouterName is the (short) hostname of a traffic router.
+type RouterName string
+
+// String implements the fmt.Stringer interface.
+func (r RouterName) String() string {
+	return string(r)
+}
+
 // CacheGroupName is the name of a Cache Group.
 type CacheGroupName string
 
