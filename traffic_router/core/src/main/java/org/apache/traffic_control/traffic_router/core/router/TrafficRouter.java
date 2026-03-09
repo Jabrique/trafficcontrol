@@ -251,6 +251,7 @@ public class TrafficRouter {
 	boolean setState(final JsonNode states) throws UnknownHostException {
 		setCacheStates(states.get("caches"));
 		setDsStates(states.get("deliveryServices"));
+		setRouterStates(states.get("routers"));
 		return true;
 	}
 
@@ -295,6 +296,28 @@ public class TrafficRouter {
 			final String monitorCacheName = cacheName.replaceFirst("@.*", "");
 			final JsonNode state = cacheStates.get(monitorCacheName);
 			cacheMap.get(cacheName).setState(state);
+		}
+		return true;
+	}
+
+	/**
+	 * Sets Traffic Router states based on the input JSON from CRStates "routers" field.
+	 * Routers present in the input which aren't registered as edge TRs are ignored.
+	 *
+	 * @param routerStates The input JSON object. Map of router names to availability state.
+	 * @return {@code false} iff routerStates was {@code null}, otherwise {@code true}.
+	 */
+	private boolean setRouterStates(final JsonNode routerStates) {
+		if (routerStates == null) {
+			return false;
+		}
+		final List<Node> allEdgeTRs = cacheRegister.getAllEdgeTrafficRouters();
+		if (allEdgeTRs == null) {
+			return false;
+		}
+		for (final Node tr : allEdgeTRs) {
+			final JsonNode state = routerStates.get(tr.getId());
+			tr.setState(state);
 		}
 		return true;
 	}
@@ -700,9 +723,24 @@ public class TrafficRouter {
 		final List<TrafficRouterLocation> trafficRouterLocations = (List<TrafficRouterLocation>) orderLocations(getCacheRegister().getEdgeTrafficRouterLocations(), clientGeolocation);
 
 		for (final TrafficRouterLocation location : trafficRouterLocations) {
-			final List<Node> trafficRouters = consistentHasher.selectHashables(location.getTrafficRouters(), zoneName);
+			final List<Node> allRouters = consistentHasher.selectHashables(location.getTrafficRouters(), zoneName);
 
-			if (trafficRouters == null || trafficRouters.isEmpty()) {
+			if (allRouters == null || allRouters.isEmpty()) {
+				continue;
+			}
+
+			// Filter out unavailable edge Traffic Routers (health-monitored by TM).
+			// Uses the same fail-open pattern as cache routing (line 209):
+			// include the TR if TM has never reported its status (!hasAuthority)
+			// OR if TM says it is available.
+			final List<Node> trafficRouters = new ArrayList<>();
+			for (final Node tr : allRouters) {
+				if (!tr.hasAuthority() || tr.isAvailable()) {
+					trafficRouters.add(tr);
+				}
+			}
+
+			if (trafficRouters.isEmpty()) {
 				continue;
 			}
 
