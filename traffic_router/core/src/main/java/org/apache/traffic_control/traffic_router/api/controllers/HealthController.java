@@ -17,10 +17,11 @@ package org.apache.traffic_control.traffic_router.api.controllers;
 
 import org.apache.traffic_control.traffic_router.core.router.StatTracker;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseBody;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
@@ -49,7 +50,7 @@ public class HealthController {
 	private volatile double currentRequestRate = 0.0;
 
 	@GetMapping
-	public @ResponseBody Map<String, Object> getHealth() {
+	public ResponseEntity<Map<String, Object>> getHealth() {
 		final Map<String, Object> health = new HashMap<>();
 		health.put("healthy", true);
 		health.put("uptime", System.currentTimeMillis() - startTimeMs);
@@ -62,7 +63,9 @@ public class HealthController {
 		health.put("requestRate", computeRequestRate(totalRequests));
 		health.put("system", getSystemStats());
 
-		return health;
+		return ResponseEntity.ok()
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(health);
 	}
 
 	private double computeRequestRate(final long currentTotal) {
