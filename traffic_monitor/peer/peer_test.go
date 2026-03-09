@@ -49,3 +49,74 @@ func TestCrStates(t *testing.T) {
 	}
 
 }
+
+func TestCRStatesThreadsafeRouterAddGetDelete(t *testing.T) {
+	crs := NewCRStatesThreadsafe()
+	routerName := tc.RouterName("tr-01")
+	avail := tc.IsAvailable{
+		IsAvailable:   true,
+		Ipv4Available: true,
+		Ipv6Available: true,
+		Status:        "REPORTED - available",
+	}
+
+	crs.AddRouter(routerName, avail)
+
+	got, ok := crs.GetRouter(routerName)
+	if !ok {
+		t.Fatal("expected GetRouter to return ok=true after AddRouter")
+	}
+	if !got.IsAvailable {
+		t.Fatal("expected router to be available")
+	}
+
+	crs.DeleteRouter(routerName)
+
+	_, ok = crs.GetRouter(routerName)
+	if ok {
+		t.Fatal("expected GetRouter to return ok=false after DeleteRouter")
+	}
+}
+
+func TestCRStatesThreadsafeSetRouterOnlyUpdatesExisting(t *testing.T) {
+	crs := NewCRStatesThreadsafe()
+	routerName := tc.RouterName("tr-01")
+	nonExistent := tc.RouterName("tr-nonexistent")
+
+	crs.AddRouter(routerName, tc.IsAvailable{IsAvailable: true, Status: "REPORTED"})
+
+	// SetRouter on non-existent should be no-op
+	crs.SetRouter(nonExistent, tc.IsAvailable{IsAvailable: false, Status: "REPORTED"})
+	_, ok := crs.GetRouter(nonExistent)
+	if ok {
+		t.Fatal("SetRouter should not create a new router entry")
+	}
+
+	// SetRouter on existing should update
+	crs.SetRouter(routerName, tc.IsAvailable{IsAvailable: false, Status: "ADMIN_DOWN"})
+	got, ok := crs.GetRouter(routerName)
+	if !ok {
+		t.Fatal("expected router to still exist after SetRouter")
+	}
+	if got.IsAvailable {
+		t.Fatal("expected router to be unavailable after SetRouter update")
+	}
+}
+
+func TestCRStatesThreadsafeGetRouters(t *testing.T) {
+	crs := NewCRStatesThreadsafe()
+	crs.AddRouter(tc.RouterName("tr-01"), tc.IsAvailable{IsAvailable: true})
+	crs.AddRouter(tc.RouterName("tr-02"), tc.IsAvailable{IsAvailable: false})
+
+	routers := crs.GetRouters()
+	if len(routers) != 2 {
+		t.Fatalf("expected 2 routers, got %d", len(routers))
+	}
+
+	// verify deep copy: mutating returned map shouldn't affect internal state
+	routers[tc.RouterName("tr-03")] = tc.IsAvailable{IsAvailable: true}
+	routersAgain := crs.GetRouters()
+	if len(routersAgain) != 2 {
+		t.Fatal("GetRouters returned map is not a deep copy")
+	}
+}

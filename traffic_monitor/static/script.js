@@ -350,6 +350,41 @@ function getDsStats() {
 }
 
 /**
+ * Fetches the current router states from TM and updates the "Router States"
+ * table with the results - replacing the current content.
+ */
+function getRouterStates() {
+	ajax("/api/router-statuses", function(r) {
+		const routers = Object.entries(JSON.parse(r)).sort((a, b) => a[0].localeCompare(b[0]));
+		const table = document.createElement('TBODY');
+		table.id = "router-states";
+
+		for (const [routerName, router] of routers) {
+			const row = table.insertRow(-1);
+
+			if (router.status === "ADMIN_DOWN") {
+				row.classList.add("warning");
+			}
+			if (!router.combined_available && router.status !== "ONLINE") {
+				row.classList.add("error");
+			}
+
+			row.insertCell(0).textContent = routerName;
+			row.insertCell(1).textContent = router.fqdn || "";
+			row.insertCell(2).textContent = router.type || "";
+			row.insertCell(3).textContent = router.cachegroup || "";
+			row.insertCell(4).textContent = router.status || "unknown";
+			row.insertCell(5).textContent = router.ipv4_available;
+			row.insertCell(6).textContent = router.ipv6_available;
+			row.insertCell(7).textContent = router.combined_available;
+		}
+
+		const oldtable = document.getElementById("router-states");
+		oldtable.parentNode.replaceChild(table, oldtable);
+	});
+}
+
+/**
  * Fetches not only the "Cache States" but also the aggregate cache server statistics used in the
  * informational section at the top of the page.
  */
@@ -368,6 +403,7 @@ function getTopBar() {
 	getTrafficOpsUri();
 	getTrafficOpsCdn();
 	getCacheStatuses();
+	getRouterStates();
 }
 
 /**
@@ -387,6 +423,7 @@ function init() {
 	setInterval(getEvents, 2004); // change to retry on failure, and only do on startup
 	setInterval(getCacheStatuses, 5009);
 	setInterval(getDsStats, 4003);
+	setInterval(getRouterStates, 5021);
 }
 
 window.addEventListener('load', init);

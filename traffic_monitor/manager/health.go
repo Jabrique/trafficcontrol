@@ -215,3 +215,111 @@ func processHealthResult(
 	lastHealthDurationsThreadsafe.Set(lastHealthDurations)
 	healthUnpolledCaches.SetHealthPolled(results)
 }
+
+// StartRouterHealthResultManager starts a goroutine that listens for router
+// health poll results, evaluates health, updates local states, and triggers
+// state combination. This is a simplified version of the cache health result
+// manager — no vitals, no stat history, no delivery service processing.
+func StartRouterHealthResultManager(
+	routerHealthChan <-chan health.RouterResult,
+	localStates peer.CRStatesThreadsafe,
+	monitorConfig threadsafe.TrafficMonitorConfigMap,
+	events health.ThreadsafeEvents,
+	combineStates func(),
+) {
+	go routerHealthResultManagerListen(
+		routerHealthChan,
+		localStates,
+		monitorConfig,
+		events,
+		combineStates,
+	)
+}
+
+func routerHealthResultManagerListen(
+	routerHealthChan <-chan health.RouterResult,
+	localStates peer.CRStatesThreadsafe,
+	monitorConfig threadsafe.TrafficMonitorConfigMap,
+	events health.ThreadsafeEvents,
+	combineStates func(),
+) {
+	for result := range routerHealthChan {
+		processRouterHealthResult(result, localStates, monitorConfig, events, combineStates)
+	}
+}
+
+func processRouterHealthResult(
+	result health.RouterResult,
+	localStates peer.CRStatesThreadsafe,
+	monitorConfig threadsafe.TrafficMonitorConfigMap,
+	events health.ThreadsafeEvents,
+	combineStates func(),
+) {
+	defer func() {
+		log.Debugf("router poll %v %v finish", result.PollID, time.Now())
+		result.PollFinished <- result.PollID
+	}()
+
+	routerName := tc.RouterName(result.ID)
+	monitorConfigCopy := monitorConfig.Get()
+
+	routerConfig, ok := monitorConfigCopy.TrafficRouter[result.ID]
+	if !ok {
+		log.Warnf("router health result for unknown router %s — skipping", result.ID)
+		return
+	}
+
+	result.Status = tc.CacheStatusFromString(routerConfig.ServerStatus)
+
+	profile, profileOk := monitorConfigCopy.Profile[routerConfig.Profile]
+	if !profileOk {
+		log.Errorf("router %s profile %s not found in config — treating as unavailable", result.ID, routerConfig.Profile)
+		localStates.SetRouter(routerName, tc.IsAvailable{IsAvailable: false, DirectlyPolled: true})
+		combineStates()
+		return
+	}
+
+	available, why := health.EvalRouterHealth(result, profile)
+
+	isAvailable := tc.IsAvailable{
+		IsAvailable:    available,
+		DirectlyPolled: true,
+		Status:         why,
+		LastPoll:       result.Time,
+	}
+	if result.UsingIPv4 {
+		isAvailable.Ipv4Available = available
+		if existing, exists := localStates.GetRouter(routerName); exists {
+			isAvailable.Ipv6Available = existing.Ipv6Available
+		}
+	} else {
+		isAvailable.Ipv6Available = available
+		if existing, exists := localStates.GetRouter(routerName); exists {
+			isAvailable.Ipv4Available = existing.Ipv4Available
+		}
+	}
+	isAvailable.IsAvailable = isAvailable.Ipv4Available || isAvailable.Ipv6Available
+	if result.Status == tc.CacheStatusAdminDown {
+		isAvailable.IsAvailable = false
+	}
+
+	prevAvail, prevExists := localStates.GetRouter(routerName)
+	if !prevExists || prevAvail.IsAvailable != isAvailable.IsAvailable {
+		availStr := "available"
+		if !isAvailable.IsAvailable {
+			availStr = "unavailable"
+		}
+		events.Add(health.Event{
+			Time:        health.Time(result.Time),
+			Description: why,
+			Name:        result.ID,
+			Hostname:    result.ID,
+			Type:        "ROUTER",
+			Available:   isAvailable.IsAvailable,
+		})
+		log.Infof("router %s now %s: %s", result.ID, availStr, why)
+	}
+
+	localStates.SetRouter(routerName, isAvailable)
+	combineStates()
+}

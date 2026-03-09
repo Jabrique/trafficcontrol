@@ -153,3 +153,114 @@ func TestCombineCacheStateCacheDown(t *testing.T) {
 		t.Fatalf("cache IPv6 is unavailable and should be available")
 	}
 }
+
+func TestCombineRouterStateHealthyBothProtocols(t *testing.T) {
+	routerName := tc.RouterName("tr-01")
+	localState := tc.IsAvailable{
+		IsAvailable:   true,
+		Ipv4Available: true,
+		Ipv6Available: true,
+	}
+
+	events := health.NewThreadsafeEvents(10)
+	peerStates := peer.NewCRStatesPeersThreadsafe(0)
+	combinedStates := peer.NewCRStatesThreadsafe()
+	overrideMap := map[tc.RouterName]bool{}
+
+	combineRouterState(routerName, localState, events, peerStates.GetCRStatesPeersInfo(), combinedStates, overrideMap)
+
+	combined := combinedStates.Get()
+	if !combined.Routers[routerName].IsAvailable {
+		t.Fatal("router should be available when locally healthy on both protocols")
+	}
+	if !combined.Routers[routerName].Ipv4Available {
+		t.Fatal("router IPv4 should be available")
+	}
+	if !combined.Routers[routerName].Ipv6Available {
+		t.Fatal("router IPv6 should be available")
+	}
+}
+
+func TestCombineRouterStateLocallyDownPeerUp(t *testing.T) {
+	routerName := tc.RouterName("tr-02")
+	localState := tc.IsAvailable{
+		IsAvailable:   false,
+		Ipv4Available: false,
+		Ipv6Available: false,
+	}
+
+	events := health.NewThreadsafeEvents(10)
+	peerStates := peer.NewCRStatesPeersThreadsafe(1)
+	peerStates.SetTimeout(time.Duration(rand.Int63()))
+	peerResult := peer.Result{
+		ID:        tc.TrafficMonitorName("peer-tm-01"),
+		Available: true,
+		PeerStates: tc.CRStates{
+			Caches: map[tc.CacheName]tc.IsAvailable{},
+			Routers: map[tc.RouterName]tc.IsAvailable{
+				routerName: {IsAvailable: true, Ipv4Available: true, Ipv6Available: true},
+			},
+		},
+		Time: time.Now(),
+	}
+	peerStates.Set(peerResult)
+	peerStates.SetPeers(map[tc.TrafficMonitorName]struct{}{
+		tc.TrafficMonitorName("peer-tm-01"): {},
+	})
+
+	combinedStates := peer.NewCRStatesThreadsafe()
+	overrideMap := map[tc.RouterName]bool{}
+
+	combineRouterState(routerName, localState, events, peerStates.GetCRStatesPeersInfo(), combinedStates, overrideMap)
+
+	combined := combinedStates.Get()
+	if !combined.Routers[routerName].IsAvailable {
+		t.Fatal("router should be available via optimistic override from peer")
+	}
+	if !overrideMap[routerName] {
+		t.Fatal("override should be set when peer reports healthy")
+	}
+}
+
+func TestCombineRouterStateLocallyDownNoPeersUp(t *testing.T) {
+	routerName := tc.RouterName("tr-03")
+	localState := tc.IsAvailable{
+		IsAvailable:   false,
+		Ipv4Available: false,
+		Ipv6Available: false,
+	}
+
+	events := health.NewThreadsafeEvents(10)
+	peerStates := peer.NewCRStatesPeersThreadsafe(0)
+	combinedStates := peer.NewCRStatesThreadsafe()
+	overrideMap := map[tc.RouterName]bool{}
+
+	combineRouterState(routerName, localState, events, peerStates.GetCRStatesPeersInfo(), combinedStates, overrideMap)
+
+	combined := combinedStates.Get()
+	if combined.Routers[routerName].IsAvailable {
+		t.Fatal("router should NOT be available — locally down and no peers")
+	}
+}
+
+func TestPruneCombinedRouters(t *testing.T) {
+	combinedStates := peer.NewCRStatesThreadsafe()
+	combinedStates.AddRouter(tc.RouterName("tr-keep"), tc.IsAvailable{IsAvailable: true})
+	combinedStates.AddRouter(tc.RouterName("tr-remove"), tc.IsAvailable{IsAvailable: true})
+
+	localStates := tc.CRStates{
+		Routers: map[tc.RouterName]tc.IsAvailable{
+			tc.RouterName("tr-keep"): {IsAvailable: true},
+		},
+	}
+
+	pruneCombinedRouters(combinedStates, localStates)
+
+	routers := combinedStates.GetRouters()
+	if _, exists := routers[tc.RouterName("tr-keep")]; !exists {
+		t.Fatal("tr-keep should still exist in combined states")
+	}
+	if _, exists := routers[tc.RouterName("tr-remove")]; exists {
+		t.Fatal("tr-remove should have been pruned from combined states")
+	}
+}

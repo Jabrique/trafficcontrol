@@ -63,6 +63,10 @@ func Start(opsConfigFile string, cfg config.Config, appData config.StaticAppData
 	distributedPeerHandler := peer.NewHandler()
 	distributedPeerPoller := poller.NewPeer(distributedPeerHandler, cfg, appData)
 
+	// Router health polling: reuses CachePoller with a router-specific handler
+	routerHealthHandler := health.NewRouterHandler()
+	routerHealthPoller := poller.NewCache(false, routerHealthHandler, cfg, appData)
+
 	go monitorConfigPoller.Poll()
 	go cacheHealthPoller.Poll()
 	if cfg.StatPolling {
@@ -72,6 +76,7 @@ func Start(opsConfigFile string, cfg config.Config, appData config.StaticAppData
 	if cfg.DistributedPolling {
 		go distributedPeerPoller.Poll()
 	}
+	go routerHealthPoller.Poll()
 
 	events := health.NewThreadsafeEvents(cfg.MaxEvents)
 
@@ -95,6 +100,7 @@ func Start(opsConfigFile string, cfg config.Config, appData config.StaticAppData
 		distributedPeerStates,
 		cacheStatPoller.ConfigChannel,
 		cacheHealthPoller.ConfigChannel,
+		routerHealthPoller.ConfigChannel,
 		peerPoller.ConfigChannel,
 		distributedPeerPoller.ConfigChannel,
 		monitorConfigPoller.IntervalChan,
@@ -136,6 +142,14 @@ func Start(opsConfigFile string, cfg config.Config, appData config.StaticAppData
 		events,
 		localCacheStatus,
 		cachesChangedForHealthMgr,
+		combineStateFunc,
+	)
+
+	StartRouterHealthResultManager(
+		routerHealthHandler.ResultChan(),
+		localStates,
+		monitorConfig,
+		events,
 		combineStateFunc,
 	)
 

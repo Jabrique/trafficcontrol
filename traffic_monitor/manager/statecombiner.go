@@ -46,8 +46,9 @@ func StartStateCombiner(events health.ThreadsafeEvents, peerStates peer.CRStates
 
 	go func() {
 		overrideMap := map[tc.CacheName]bool{}
+		routerOverrideMap := map[tc.RouterName]bool{}
 		for range combineStateChan {
-			combineCrStates(events, peerStates.GetCRStatesPeersInfo(), localStates.Get(), combinedStates, overrideMap, toData.Get())
+			combineCrStates(events, peerStates.GetCRStatesPeersInfo(), localStates.Get(), combinedStates, overrideMap, routerOverrideMap, toData.Get())
 		}
 	}()
 
@@ -131,6 +132,87 @@ func combineCacheState(
 	combinedStates.AddCache(cacheName, tc.IsAvailable{IsAvailable: available, Ipv4Available: ipv4Available, Ipv6Available: ipv6Available, DirectlyPolled: localCacheState.DirectlyPolled, Status: localCacheState.Status, LastPoll: localCacheState.LastPoll})
 }
 
+func combineRouterState(
+	routerName tc.RouterName,
+	localRouterState tc.IsAvailable,
+	events health.ThreadsafeEvents,
+	peerCrStatesInfo peer.CRStatesPeersInfo,
+	combinedStates peer.CRStatesThreadsafe,
+	overrideMap map[tc.RouterName]bool,
+) {
+	overrideCondition := ""
+	available := localRouterState.Ipv4Available || localRouterState.Ipv6Available
+	ipv4Available := localRouterState.Ipv4Available
+	ipv6Available := localRouterState.Ipv6Available
+	override := overrideMap[routerName]
+
+	if localRouterState.Ipv4Available && localRouterState.Ipv6Available {
+		if override {
+			overrideCondition = "cleared; healthy locally"
+			overrideMap[routerName] = false
+		}
+	} else if !peerCrStatesInfo.HasAvailablePeers() {
+		if override {
+			overrideCondition = "irrelevant; no peers online"
+			overrideMap[routerName] = false
+		}
+	} else {
+		onlineOnPeers := make([]string, 0)
+		ipv4OnlineOnPeers := make([]string, 0)
+		ipv6OnlineOnPeers := make([]string, 0)
+
+		for peerName, peerCrStates := range peerCrStatesInfo.GetCrStates() {
+			if peerCrStatesInfo.GetPeerAvailability(peerName) {
+				if peerCrStates.Routers == nil {
+					continue
+				}
+				peerRouterState, exists := peerCrStates.Routers[routerName]
+				if !exists {
+					continue
+				}
+				if peerRouterState.IsAvailable {
+					onlineOnPeers = append(onlineOnPeers, peerName.String())
+				}
+				if peerRouterState.Ipv4Available {
+					ipv4OnlineOnPeers = append(ipv4OnlineOnPeers, peerName.String())
+				}
+				if peerRouterState.Ipv6Available {
+					ipv6OnlineOnPeers = append(ipv6OnlineOnPeers, peerName.String())
+				}
+			}
+		}
+
+		if len(onlineOnPeers) > 0 {
+			available = true
+			ipv4Available = ipv4Available || len(ipv4OnlineOnPeers) > 0
+			ipv6Available = ipv6Available || len(ipv6OnlineOnPeers) > 0
+
+			if !override {
+				overrideCondition = fmt.Sprintf("detected; healthy on (at least) %s", strings.Join(onlineOnPeers, ", "))
+				overrideMap[routerName] = true
+			}
+		} else if override {
+			overrideCondition = "irrelevant; not online on any peers"
+			overrideMap[routerName] = false
+		}
+	}
+
+	if overrideCondition != "" {
+		events.Add(
+			health.Event{
+				Time:          health.Time(time.Now()),
+				Description:   fmt.Sprintf("Health protocol override condition %s", overrideCondition),
+				Name:          routerName.String(),
+				Hostname:      routerName.String(),
+				Type:          tc.RouterTypeName,
+				Available:     available,
+				IPv4Available: ipv4Available,
+				IPv6Available: ipv6Available})
+	}
+
+	combinedStates.AddRouter(routerName, tc.IsAvailable{IsAvailable: available, Ipv4Available: ipv4Available, Ipv6Available: ipv6Available, DirectlyPolled: localRouterState.DirectlyPolled, Status: localRouterState.Status, LastPoll: localRouterState.LastPoll})
+}
+
 func combineDSState(
 	deliveryServiceName tc.DeliveryServiceName,
 	localDeliveryService tc.CRStatesDeliveryService,
@@ -190,7 +272,17 @@ func pruneCombinedCaches(combinedStates peer.CRStatesThreadsafe, localStates tc.
 	}
 }
 
-func combineCrStates(events health.ThreadsafeEvents, peerCrStatesInfo peer.CRStatesPeersInfo, localStates tc.CRStates, combinedStates peer.CRStatesThreadsafe, overrideMap map[tc.CacheName]bool, toData todata.TOData) {
+// pruneCombinedRouters deletes routers in combined states which have been removed from localStates.
+func pruneCombinedRouters(combinedStates peer.CRStatesThreadsafe, localStates tc.CRStates) {
+	combinedRouters := combinedStates.GetRouters()
+	for routerName := range combinedRouters {
+		if _, ok := localStates.Routers[routerName]; !ok {
+			combinedStates.DeleteRouter(routerName)
+		}
+	}
+}
+
+func combineCrStates(events health.ThreadsafeEvents, peerCrStatesInfo peer.CRStatesPeersInfo, localStates tc.CRStates, combinedStates peer.CRStatesThreadsafe, overrideMap map[tc.CacheName]bool, routerOverrideMap map[tc.RouterName]bool, toData todata.TOData) {
 	for cacheName, localCacheState := range localStates.Caches { // localStates gets pruned when servers are disabled, it's the source of truth
 		combineCacheState(cacheName, localCacheState, events, peerCrStatesInfo, combinedStates, overrideMap, toData)
 	}
@@ -201,6 +293,11 @@ func combineCrStates(events health.ThreadsafeEvents, peerCrStatesInfo peer.CRSta
 
 	pruneCombinedDSState(combinedStates, localStates, peerCrStatesInfo)
 	pruneCombinedCaches(combinedStates, localStates)
+
+	for routerName, localRouterState := range localStates.Routers {
+		combineRouterState(routerName, localRouterState, events, peerCrStatesInfo, combinedStates, routerOverrideMap)
+	}
+	pruneCombinedRouters(combinedStates, localStates)
 }
 
 // CacheGroupNameSlice is a slice of cache names, which fulfills the `sort.Interface` interface.
