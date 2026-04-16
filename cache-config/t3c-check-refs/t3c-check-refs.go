@@ -115,26 +115,39 @@ func checkConfigLine(line string, lineNumber int, filesAdding map[string]struct{
 				// are assumed to be configuration files and are checked that they
 				// exist in the filesystem at the absolute location in the name
 				// or relative to the ATS configuration files directory.
-				m := regexp.MustCompile(`^.+(\.config|\.cfg|\.txt|\.yml|\.yaml|\.lua)$`)
+				//
+				// [^=]+ extracts the filename portion from --option=filename.config
+				// style params, skipping past the '=' delimiter. This matches the
+				// approach used by the plugin.config path below.
+				m := regexp.MustCompile(`([^=]+\.config$|[^=]+\.cfg$|[^=]+\.txt$|[^=]+\.yml$|[^=]+\.yaml$|[^=]+\.lua$)`)
 				sa := strings.SplitN(fields[ii], "=", 2)
 				if len(sa) != 2 {
 					log.Errorf("malformed @pparam definition in remap.config on line '%d': %v\n", lineNumber, fields)
 					pluginErrorCount++
 				} else {
 					param := strings.TrimSpace(sa[1])
-					if m.MatchString(param) {
-						verified, exists = pluginParams[param]
+					cfgMatch := m.FindStringSubmatch(param)
+					if len(cfgMatch) == 2 {
+						configFile := cfgMatch[0]
+						// Strip classifier prefix for formats like cachekey's
+						// --ua-allowlist=popular:filename.config
+						if !filepath.IsAbs(configFile) {
+							if idx := strings.LastIndex(configFile, ":"); idx != -1 {
+								configFile = configFile[idx+1:]
+							}
+						}
+						verified, exists = pluginParams[configFile]
 						if !exists {
-							verified = verifyPluginConfigfile(param, filesAdding)
-							pluginParams[param] = verified
+							verified = verifyPluginConfigfile(configFile, filesAdding)
+							pluginParams[configFile] = verified
 						}
 						if !verified {
 							log.Errorf("the plugin config file '%s' on line '%d' of remap.config does not exist or is empty\n",
-								param, lineNumber)
+								configFile, lineNumber)
 							pluginErrorCount++
 						} else {
 							log.Infof("the plugin config file '%s' on line '%d' of remap.config has been verified\n",
-								param, lineNumber)
+								configFile, lineNumber)
 						}
 					}
 				}
