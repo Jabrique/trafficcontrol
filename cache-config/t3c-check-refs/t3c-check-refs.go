@@ -116,8 +116,8 @@ func checkConfigLine(line string, lineNumber int, filesAdding map[string]struct{
 				// exist in the filesystem at the absolute location in the name
 				// or relative to the ATS configuration files directory.
 				m := regexp.MustCompile(`^.+(\.config|\.cfg|\.txt|\.yml|\.yaml|\.lua)$`)
-				sa := strings.Split(fields[ii], "=")
-				if len(sa) != 2 && len(sa) != 3 {
+				sa := strings.SplitN(fields[ii], "=", 2)
+				if len(sa) != 2 {
 					log.Errorf("malformed @pparam definition in remap.config on line '%d': %v\n", lineNumber, fields)
 					pluginErrorCount++
 				} else {
