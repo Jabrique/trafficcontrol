@@ -223,6 +223,20 @@ public class ConfigHandler {
 			// so the watcher always injects into the clean base config.
 			if (!isDnsChallenge) {
 				lastValidCrConfigJson = jsonStr;
+
+				// Re-inject any active DNS challenges from the watcher's local cache into
+				// this snapshot BEFORE the CacheRegister is built from it.
+				//
+				// This is the critical fix for the HTTP 304 problem: the watcher only calls
+				// useData() when Traffic Ops returns new data (200 OK). If the challenge
+				// data hasn't changed, subsequent polls return 304 and useData() is never
+				// called — so a challenge wiped by a CRConfig reload would never be
+				// re-injected. By reading directly from the watcher's locally cached DB file
+				// here, we guarantee challenges survive every CRConfig reload regardless
+				// of the watcher's HTTP caching state.
+				if (letsEncryptDnsChallengeWatcher != null) {
+					letsEncryptDnsChallengeWatcher.injectActiveChallengesInto(mapper, (ObjectNode) jo);
+				}
 			}
 
 			try {

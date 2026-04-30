@@ -199,6 +199,89 @@ public class LetsEncryptDnsChallengeWatcher extends AbstractResourceWatcher {
         return newStaticDnsEntriesNode;
     }
 
+    /**
+     * Injects active Let's Encrypt DNS challenges from the watcher's locally cached
+     * challenge file directly into the provided CRConfig JSON tree.
+     *
+     * <p>This method is called by {@link org.apache.traffic_control.traffic_router.core.config.ConfigHandler}
+     * on every real CRConfig snapshot reload. It ensures that active challenges survive
+     * a CRConfig reload even when {@link #useData} is not called because Traffic Ops
+     * returned HTTP 304 (challenge data unchanged). Without this, a challenge injected
+     * at T=0 would be silently wiped by the next CRConfig snapshot and never
+     * re-injected until the challenge data itself changes.
+     *
+     * <p>Reads {@code databasesDirectory/databaseName} — the watcher's own cached copy
+     * of the {@code /letsencrypt/dnsrecords/} response — which is kept up to date
+     * independently of the CRConfig lifecycle.
+     *
+     * @param mapper     the ObjectMapper to use for JSON parsing
+     * @param configRoot the mutable root ObjectNode of the CRConfig being processed
+     */
+    public void injectActiveChallengesInto(final ObjectMapper mapper, final ObjectNode configRoot) {
+        if (databaseName == null || databasesDirectory == null) {
+            return;
+        }
+        final File dbFile = databasesDirectory.resolve(databaseName).toFile();
+        if (!dbFile.exists() || dbFile.length() == 0) {
+            return;
+        }
+
+        try {
+            final StringBuilder sb = new StringBuilder();
+            try (BufferedReader br = new BufferedReader(new FileReader(dbFile))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    sb.append(line);
+                }
+            }
+
+            final HashMap<String, List<LetsEncryptDnsChallenge>> dataMap =
+                mapper.readValue(sb.toString(), new TypeReference<HashMap<String, List<LetsEncryptDnsChallenge>>>() { });
+            final List<LetsEncryptDnsChallenge> challengeList = dataMap.get("response");
+            if (challengeList == null || challengeList.isEmpty()) {
+                return;
+            }
+
+            final ObjectNode deliveryServicesNode =
+                (ObjectNode) JsonUtils.getJsonNode(configRoot, ConfigHandler.deliveryServicesKey);
+
+            challengeList.forEach(challenge -> {
+                final ObjectNode deliveryServiceConfig =
+                    (ObjectNode) deliveryServicesNode.get(challenge.getXmlId());
+                if (deliveryServiceConfig == null) {
+                    LOGGER.warn("injectActiveChallengesInto: DS '" + challenge.getXmlId() + "' not found in CRConfig; skipping");
+                    return;
+                }
+
+                String staticEntryString = challenge.getFqdn();
+                final ArrayNode domains = (ArrayNode) deliveryServiceConfig.get("domains");
+                if (domains == null || domains.size() == 0) {
+                    LOGGER.warn("injectActiveChallengesInto: no domains for DS '" + challenge.getXmlId() + "'; skipping");
+                    return;
+                }
+
+                final Iterator<JsonNode> domainIter = domains.iterator();
+                while (domainIter.hasNext()) {
+                    staticEntryString = staticEntryString.replace(domainIter.next().asText() + ".", "");
+                }
+                if (staticEntryString.endsWith(".")) {
+                    staticEntryString = staticEntryString.substring(0, staticEntryString.length() - 1);
+                }
+
+                final ArrayNode updatedEntries =
+                    updateStaticEntries(challenge, staticEntryString, mapper, deliveryServiceConfig);
+                deliveryServiceConfig.set("staticDnsEntries", updatedEntries);
+                deliveryServicesNode.set(challenge.getXmlId(), deliveryServiceConfig);
+            });
+
+            configRoot.set(ConfigHandler.deliveryServicesKey, deliveryServicesNode);
+            LOGGER.info("injectActiveChallengesInto: injected " + challengeList.size()
+                + " active DNS challenge(s) into CRConfig snapshot");
+        } catch (Exception e) {
+            LOGGER.warn("injectActiveChallengesInto: failed to inject active challenges into CRConfig", e);
+        }
+    }
+
     public void setConfigHandler(final ConfigHandler configHandler) {
         this.configHandler = configHandler;
     }
