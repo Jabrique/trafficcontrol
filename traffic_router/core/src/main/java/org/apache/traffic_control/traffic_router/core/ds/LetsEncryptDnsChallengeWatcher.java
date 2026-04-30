@@ -31,7 +31,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.*;
-import java.time.Instant;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -55,7 +54,26 @@ public class LetsEncryptDnsChallengeWatcher extends AbstractResourceWatcher {
             final HashMap<String, List<LetsEncryptDnsChallenge>> dataMap = mapper.readValue(data, new TypeReference<HashMap<String, List<LetsEncryptDnsChallenge>>>() { });
             final List<LetsEncryptDnsChallenge> challengeList = dataMap.get("response");
 
-            final JsonNode mostRecentConfig = mapper.readTree(readConfigFile());
+            // Prefer the in-memory cached CRConfig over the disk file.
+            // The disk file can be stale if a CRConfig snapshot was applied by TrafficMonitorWatcher
+            // after a previous challenge injection. Reading from memory guarantees we always inject
+            // into the most recently accepted config, not one that may have already been superseded.
+            final String baseConfigJson = configHandler.getLastValidCrConfigJson();
+            final JsonNode mostRecentConfig;
+            if (baseConfigJson != null) {
+                LOGGER.info("LetsEncryptDnsChallengeWatcher: using in-memory CRConfig as injection base");
+                mostRecentConfig = mapper.readTree(baseConfigJson);
+            } else {
+                // Fallback for startup race: no config has been processed yet, read from disk.
+                LOGGER.info("LetsEncryptDnsChallengeWatcher: no in-memory CRConfig available, falling back to disk file");
+                final String diskConfig = readConfigFile();
+                if (diskConfig == null) {
+                    LOGGER.error("LetsEncryptDnsChallengeWatcher: cannot inject challenges, both in-memory and disk CRConfig are unavailable");
+                    return false;
+                }
+                mostRecentConfig = mapper.readTree(diskConfig);
+            }
+
             final ObjectNode deliveryServicesNode = (ObjectNode) JsonUtils.getJsonNode(mostRecentConfig, ConfigHandler.deliveryServicesKey);
 
 
@@ -90,15 +108,21 @@ public class LetsEncryptDnsChallengeWatcher extends AbstractResourceWatcher {
 
             });
 
-            final ObjectNode statsNode = (ObjectNode) mostRecentConfig.get("stats");
-            statsNode.put("date", Instant.now().toEpochMilli() / 1000L);
-
             final ObjectNode fullConfig = (ObjectNode) mostRecentConfig;
             fullConfig.set(ConfigHandler.deliveryServicesKey, deliveryServicesNode);
-            fullConfig.set("stats", statsNode);
 
+            // NOTE: We intentionally do NOT bump stats.date here.
+            // Previously the code set stats.date = Instant.now() to bypass the snapshot timestamp
+            // guard in ConfigHandler.processConfig(). This was incorrect: it caused the
+            // lastSnapshotTimestamp to advance to the current wall clock, which would then
+            // reject any legitimate CRConfig snapshot from Traffic Monitor that was generated
+            // before that moment.
+            //
+            // Instead, we now call processConfigForDnsChallenge() which has an explicit bypass
+            // for the timestamp guard and does NOT update lastSnapshotTimestamp, ensuring
+            // real CRConfig updates from Traffic Monitor are never blocked.
             try {
-                configHandler.processConfig(fullConfig.toString());
+                configHandler.processConfigForDnsChallenge(fullConfig.toString());
             } catch (JsonParseException | JsonUtilsException jsonError) {
                 LOGGER.error("error processing config: " + jsonError.getMessage());
             }
