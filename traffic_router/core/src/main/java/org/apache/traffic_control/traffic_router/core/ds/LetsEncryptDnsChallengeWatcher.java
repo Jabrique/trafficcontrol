@@ -50,86 +50,31 @@ public class LetsEncryptDnsChallengeWatcher extends AbstractResourceWatcher {
     @Override
     public boolean useData(final String data) {
         try {
-            final ObjectMapper mapper = new ObjectMapper(new JsonFactory());
-            final HashMap<String, List<LetsEncryptDnsChallenge>> dataMap = mapper.readValue(data, new TypeReference<HashMap<String, List<LetsEncryptDnsChallenge>>>() { });
-            final List<LetsEncryptDnsChallenge> challengeList = dataMap.get("response");
-
-            // Prefer the in-memory cached CRConfig over the disk file.
-            // The disk file can be stale if a CRConfig snapshot was applied by TrafficMonitorWatcher
-            // after a previous challenge injection. Reading from memory guarantees we always inject
-            // into the most recently accepted config, not one that may have already been superseded.
-            final String baseConfigJson = configHandler.getLastValidCrConfigJson();
-            final JsonNode mostRecentConfig;
-            if (baseConfigJson != null) {
-                LOGGER.info("LetsEncryptDnsChallengeWatcher: using in-memory CRConfig as injection base");
-                mostRecentConfig = mapper.readTree(baseConfigJson);
-            } else {
-                // Fallback for startup race: no config has been processed yet, read from disk.
-                LOGGER.info("LetsEncryptDnsChallengeWatcher: no in-memory CRConfig available, falling back to disk file");
-                final String diskConfig = readConfigFile();
-                if (diskConfig == null) {
-                    LOGGER.error("LetsEncryptDnsChallengeWatcher: cannot inject challenges, both in-memory and disk CRConfig are unavailable");
-                    return false;
-                }
-                mostRecentConfig = mapper.readTree(diskConfig);
+            // The actual DNS challenge injection now happens safely inside ConfigHandler's
+            // synchronized block using injectActiveChallengesInto(), which reads directly
+            // from this watcher's locally cached DB file.
+            //
+            // We pass the disk fallback config here. ConfigHandler's processConfigInternal
+            // will ONLY use this fallback if its own in-memory lastValidCrConfigJson is
+            // still null (e.g. startup race). Otherwise, it will safely override this
+            // fallback with the absolute freshest in-memory config inside its synchronized
+            // lock to prevent Read-Modify-Write race conditions.
+            String fallbackConfig = readConfigFile();
+            if (fallbackConfig == null) {
+                // Dummy config to avoid NPE before the override check. If both memory and
+                // disk configs are null, TR is completely unconfigured anyway.
+                fallbackConfig = "{}";
             }
 
-            final ObjectNode deliveryServicesNode = (ObjectNode) JsonUtils.getJsonNode(mostRecentConfig, ConfigHandler.deliveryServicesKey);
-
-
-            challengeList.forEach(challenge -> {
-                final ObjectNode deliveryServiceConfig = (ObjectNode) deliveryServicesNode.get(challenge.getXmlId());
-                if (deliveryServiceConfig == null) {
-                    LOGGER.error("finding deliveryservice in cr-config for " + challenge.getXmlId());
-                    return;
-                }
-
-                String staticEntryString = challenge.getFqdn();
-                final ArrayNode domains = (ArrayNode) deliveryServiceConfig.get("domains");
-                if (domains == null || domains.size() == 0) {
-                    LOGGER.error("no domains found in cr-config for deliveryservice " + challenge.getXmlId());
-                    return;
-                }
-
-                final Iterator<JsonNode> domainIter = domains.iterator();
-                while(domainIter.hasNext()) {
-                    final JsonNode domainNode = domainIter.next();
-                    staticEntryString = staticEntryString.replace(domainNode.asText() + ".", "");
-                }
-
-                if (staticEntryString.endsWith(".")) {
-                    staticEntryString = staticEntryString.substring(0, staticEntryString.length() - 1);
-                }
-
-                final ArrayNode staticDnsEntriesNode = updateStaticEntries(challenge, staticEntryString, mapper, deliveryServiceConfig);
-
-                deliveryServiceConfig.set("staticDnsEntries", staticDnsEntriesNode);
-                deliveryServicesNode.set(challenge.getXmlId(), deliveryServiceConfig);
-
-            });
-
-            final ObjectNode fullConfig = (ObjectNode) mostRecentConfig;
-            fullConfig.set(ConfigHandler.deliveryServicesKey, deliveryServicesNode);
-
-            // NOTE: We intentionally do NOT bump stats.date here.
-            // Previously the code set stats.date = Instant.now() to bypass the snapshot timestamp
-            // guard in ConfigHandler.processConfig(). This was incorrect: it caused the
-            // lastSnapshotTimestamp to advance to the current wall clock, which would then
-            // reject any legitimate CRConfig snapshot from Traffic Monitor that was generated
-            // before that moment.
-            //
-            // Instead, we now call processConfigForDnsChallenge() which has an explicit bypass
-            // for the timestamp guard and does NOT update lastSnapshotTimestamp, ensuring
-            // real CRConfig updates from Traffic Monitor are never blocked.
             try {
-                configHandler.processConfigForDnsChallenge(fullConfig.toString());
-            } catch (JsonParseException | JsonUtilsException jsonError) {
+                configHandler.processConfigForDnsChallenge(fallbackConfig);
+            } catch (Exception jsonError) {
                 LOGGER.error("error processing config: " + jsonError.getMessage());
             }
 
             return true;
         } catch (Exception e) {
-            LOGGER.warn("Failed updating dns challenge txt record with data from " + dataBaseURL + ":", e);
+            LOGGER.warn("Failed updating dns challenge txt record:", e);
         }
 
         return false;
