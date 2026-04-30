@@ -81,6 +81,13 @@ public class ConfigHandler {
 	public static String deliveryServicesKey = "deliveryServices";
 	public static String topologiesKey = "topologies";
 
+	/**
+	 * Stores the last CRConfig JSON that successfully passed the timestamp check.
+	 * Used by LetsEncryptDnsChallengeWatcher to inject challenges into the most
+	 * recent known-good config rather than reading from a potentially stale disk file.
+	 */
+	private volatile String lastValidCrConfigJson = null;
+
 	private TrafficRouterManager trafficRouterManager;
 	private GeolocationDatabaseUpdater geolocationDatabaseUpdater;
 	private StatTracker statTracker;
@@ -142,8 +149,43 @@ public class ConfigHandler {
 		return anonymousIpDatabaseUpdater;
 	}
 
+	/**
+	 * Returns the raw JSON string of the last CRConfig snapshot that was successfully processed.
+	 * May be null if no config has been processed yet (e.g., at startup before the first
+	 * successful TrafficMonitor snapshot download).
+	 */
+	public String getLastValidCrConfigJson() {
+		return lastValidCrConfigJson;
+	}
+
+	/**
+	 * Processes a CRConfig that has been modified to include active Let's Encrypt DNS challenges.
+	 * Unlike the standard processConfig(), this method:
+	 * <ul>
+	 *   <li>Bypasses the snapshot timestamp guard so the same base CRConfig can be re-applied
+	 *       with challenge data injected without requiring a newer Traffic Ops snapshot.</li>
+	 *   <li>Does NOT update lastSnapshotTimestamp, preserving the guard for future real
+	 *       CRConfig updates from Traffic Monitor.</li>
+	 * </ul>
+	 * This is the only correct entry point for LetsEncryptDnsChallengeWatcher.
+	 */
+	@SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity", "PMD.AvoidCatchingThrowable"})
+	public boolean processConfigForDnsChallenge(final String jsonStr) throws JsonUtilsException, IOException {
+		if (jsonStr == null) {
+			LOGGER.warn("processConfigForDnsChallenge called with null JSON; skipping");
+			return false;
+		}
+		LOGGER.info("processConfigForDnsChallenge: applying CRConfig with injected DNS challenge");
+		return processConfigInternal(jsonStr, true);
+	}
+
 	@SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity", "PMD.AvoidCatchingThrowable"})
 	public boolean processConfig(final String jsonStr) throws JsonUtilsException, IOException  {
+		return processConfigInternal(jsonStr, false);
+	}
+
+	@SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity", "PMD.AvoidCatchingThrowable"})
+	private boolean processConfigInternal(final String jsonStr, final boolean isDnsChallenge) throws JsonUtilsException, IOException  {
 		isProcessing.set(true);
 		LOGGER.info("Entered processConfig");
 		if (jsonStr == null) {
@@ -165,12 +207,22 @@ public class ConfigHandler {
 			final long sts = getSnapshotTimestamp(stats);
 			date = new Date(sts * 1000L);
 
-			if (sts <= getLastSnapshotTimestamp()) {
+			// Normal CRConfig updates from Traffic Monitor must be newer than the last applied snapshot.
+			// DNS challenge re-injections bypass this check because they re-apply the same base config
+			// with challenge data added — they must not block or be blocked by real config updates.
+			if (!isDnsChallenge && sts <= getLastSnapshotTimestamp()) {
 				cancelled.set(false);
 				isProcessing.set(false);
 				publishStatusQueue.clear();
 				LOGGER.info("Exiting processConfig: Incoming TrConfig snapshot timestamp (" + sts + ") is older or equal to the loaded timestamp (" + getLastSnapshotTimestamp() + "); unable to process");
 				return false;
+			}
+
+			// Cache the raw CRConfig JSON for use by LetsEncryptDnsChallengeWatcher.
+			// We only cache real CRConfig updates, not the challenge-injected variants,
+			// so the watcher always injects into the clean base config.
+			if (!isDnsChallenge) {
+				lastValidCrConfigJson = jsonStr;
 			}
 
 			try {
@@ -266,7 +318,12 @@ public class ConfigHandler {
 				 */
 				NetworkNode.getInstance().clearLocations();
 				NetworkNode.getDeepInstance().clearLocations(true);
-				setLastSnapshotTimestamp(sts);
+				// Only advance the snapshot timestamp for real CRConfig updates.
+				// Challenge-injected re-applications must NOT advance the timestamp,
+				// which would block subsequent real CRConfig updates from Traffic Monitor.
+				if (!isDnsChallenge) {
+					setLastSnapshotTimestamp(sts);
+				}
 			} catch (ParseException e) {
 				isProcessing.set(false);
 				cancelled.set(false);
