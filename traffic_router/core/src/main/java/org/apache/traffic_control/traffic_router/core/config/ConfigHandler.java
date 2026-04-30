@@ -49,6 +49,7 @@ import org.apache.traffic_control.traffic_router.core.util.JsonUtils;
 import org.apache.traffic_control.traffic_router.core.util.JsonUtilsException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -199,8 +200,16 @@ public class ConfigHandler {
 
 		Date date;
 		synchronized(configSync) {
+			String activeJsonStr = jsonStr;
+			// CRITICAL FIX: To prevent Read-Modify-Write race conditions where a Traffic Monitor
+			// update happens concurrently with a DNS challenge trigger, we MUST grab the absolute
+			// freshest CRConfig base string from inside this lock.
+			if (isDnsChallenge && lastValidCrConfigJson != null) {
+				activeJsonStr = lastValidCrConfigJson;
+			}
+
 			final ObjectMapper mapper = new ObjectMapper();
-			final JsonNode jo = mapper.readTree(jsonStr);
+			final JsonNode jo = mapper.readTree(activeJsonStr);
 			final JsonNode config = JsonUtils.getJsonNode(jo, "config");
 			final JsonNode stats = JsonUtils.getJsonNode(jo, "stats");
 
@@ -218,25 +227,17 @@ public class ConfigHandler {
 				return false;
 			}
 
-			// Cache the raw CRConfig JSON for use by LetsEncryptDnsChallengeWatcher.
-			// We only cache real CRConfig updates, not the challenge-injected variants,
-			// so the watcher always injects into the clean base config.
+			// Cache the raw CRConfig JSON for use as the clean base config.
 			if (!isDnsChallenge) {
 				lastValidCrConfigJson = jsonStr;
+			}
 
-				// Re-inject any active DNS challenges from the watcher's local cache into
-				// this snapshot BEFORE the CacheRegister is built from it.
-				//
-				// This is the critical fix for the HTTP 304 problem: the watcher only calls
-				// useData() when Traffic Ops returns new data (200 OK). If the challenge
-				// data hasn't changed, subsequent polls return 304 and useData() is never
-				// called — so a challenge wiped by a CRConfig reload would never be
-				// re-injected. By reading directly from the watcher's locally cached DB file
-				// here, we guarantee challenges survive every CRConfig reload regardless
-				// of the watcher's HTTP caching state.
-				if (letsEncryptDnsChallengeWatcher != null) {
-					letsEncryptDnsChallengeWatcher.injectActiveChallengesInto(mapper, (ObjectNode) jo);
-				}
+			// ALWAYS inject active DNS challenges from the watcher's local cache into this
+			// snapshot BEFORE the CacheRegister is built from it.
+			// This happens for both real CRConfig updates (!isDnsChallenge) to survive HTTP 304 cycles,
+			// AND manual DNS challenge triggers (isDnsChallenge) from the watcher.
+			if (letsEncryptDnsChallengeWatcher != null) {
+				letsEncryptDnsChallengeWatcher.injectActiveChallengesInto(mapper, (ObjectNode) jo);
 			}
 
 			try {
