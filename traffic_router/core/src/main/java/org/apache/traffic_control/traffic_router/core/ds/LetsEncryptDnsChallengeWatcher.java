@@ -18,10 +18,8 @@ package org.apache.traffic_control.traffic_router.core.ds;
 import org.apache.traffic_control.traffic_router.core.config.ConfigHandler;
 import org.apache.traffic_control.traffic_router.core.util.AbstractResourceWatcher;
 import org.apache.traffic_control.traffic_router.core.util.JsonUtils;
-import org.apache.traffic_control.traffic_router.core.util.JsonUtilsException;
 import org.apache.traffic_control.traffic_router.core.util.TrafficOpsUtils;
 import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -117,27 +115,32 @@ public class LetsEncryptDnsChallengeWatcher extends AbstractResourceWatcher {
 
     private ArrayNode updateStaticEntries(final LetsEncryptDnsChallenge challenge, final String name, final ObjectMapper mapper, final ObjectNode deliveryServiceConfig) {
         ArrayNode staticDnsEntriesNode = mapper.createArrayNode();
-        ArrayNode newStaticDnsEntriesNode = mapper.createArrayNode();
 
         if (deliveryServiceConfig.findValue("staticDnsEntries") != null) {
             staticDnsEntriesNode = (ArrayNode) deliveryServiceConfig.findValue("staticDnsEntries");
         }
 
-        if (challenge.getRecord().isEmpty()) {
-            for (int i = 0; i < staticDnsEntriesNode.size(); i++) {
-                if (!staticDnsEntriesNode.get(i).get("name").equals(name)) {
-                    newStaticDnsEntriesNode.add(i);
-                }
+        // Build a new array, filtering out any existing entry with the same name first.
+        // This prevents duplicate TXT records from accumulating when the same challenge
+        // is re-injected on every CRConfig reload (which happens by design for the 304 fix).
+        final ArrayNode newStaticDnsEntriesNode = mapper.createArrayNode();
+        for (int i = 0; i < staticDnsEntriesNode.size(); i++) {
+            final JsonNode existing = staticDnsEntriesNode.get(i);
+            final JsonNode existingName = existing.get("name");
+            if (existingName == null || !existingName.asText().equals(name)) {
+                newStaticDnsEntriesNode.add(existing);
             }
-        } else {
-            newStaticDnsEntriesNode = staticDnsEntriesNode;
+        }
 
+        // Only add a new entry if the challenge record is non-empty.
+        // An empty record signals cleanup — in that case we've already removed
+        // the matching entry in the loop above, so nothing more to do.
+        if (!challenge.getRecord().isEmpty()) {
             final ObjectNode newChildNode = mapper.createObjectNode();
             newChildNode.put("type", "TXT");
             newChildNode.put("name", name);
             newChildNode.put("value", challenge.getRecord());
             newChildNode.put("ttl", 10);
-
             newStaticDnsEntriesNode.add(newChildNode);
         }
 
@@ -162,6 +165,7 @@ public class LetsEncryptDnsChallengeWatcher extends AbstractResourceWatcher {
      * @param mapper     the ObjectMapper to use for JSON parsing
      * @param configRoot the mutable root ObjectNode of the CRConfig being processed
      */
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable"})
     public void injectActiveChallengesInto(final ObjectMapper mapper, final ObjectNode configRoot) {
         if (databaseName == null || databasesDirectory == null) {
             return;
@@ -172,17 +176,7 @@ public class LetsEncryptDnsChallengeWatcher extends AbstractResourceWatcher {
         }
 
         try {
-            final StringBuilder sb = new StringBuilder();
-            try (BufferedReader br = new BufferedReader(new FileReader(dbFile))) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    sb.append(line);
-                }
-            }
-
-            final HashMap<String, List<LetsEncryptDnsChallenge>> dataMap =
-                mapper.readValue(sb.toString(), new TypeReference<HashMap<String, List<LetsEncryptDnsChallenge>>>() { });
-            final List<LetsEncryptDnsChallenge> challengeList = dataMap.get("response");
+            final List<LetsEncryptDnsChallenge> challengeList = readActiveChallenges(mapper, dbFile);
             if (challengeList == null || challengeList.isEmpty()) {
                 return;
             }
@@ -190,34 +184,7 @@ public class LetsEncryptDnsChallengeWatcher extends AbstractResourceWatcher {
             final ObjectNode deliveryServicesNode =
                 (ObjectNode) JsonUtils.getJsonNode(configRoot, ConfigHandler.deliveryServicesKey);
 
-            challengeList.forEach(challenge -> {
-                final ObjectNode deliveryServiceConfig =
-                    (ObjectNode) deliveryServicesNode.get(challenge.getXmlId());
-                if (deliveryServiceConfig == null) {
-                    LOGGER.warn("injectActiveChallengesInto: DS '" + challenge.getXmlId() + "' not found in CRConfig; skipping");
-                    return;
-                }
-
-                String staticEntryString = challenge.getFqdn();
-                final ArrayNode domains = (ArrayNode) deliveryServiceConfig.get("domains");
-                if (domains == null || domains.size() == 0) {
-                    LOGGER.warn("injectActiveChallengesInto: no domains for DS '" + challenge.getXmlId() + "'; skipping");
-                    return;
-                }
-
-                final Iterator<JsonNode> domainIter = domains.iterator();
-                while (domainIter.hasNext()) {
-                    staticEntryString = staticEntryString.replace(domainIter.next().asText() + ".", "");
-                }
-                if (staticEntryString.endsWith(".")) {
-                    staticEntryString = staticEntryString.substring(0, staticEntryString.length() - 1);
-                }
-
-                final ArrayNode updatedEntries =
-                    updateStaticEntries(challenge, staticEntryString, mapper, deliveryServiceConfig);
-                deliveryServiceConfig.set("staticDnsEntries", updatedEntries);
-                deliveryServicesNode.set(challenge.getXmlId(), deliveryServiceConfig);
-            });
+            challengeList.forEach(challenge -> injectSingleChallenge(challenge, mapper, deliveryServicesNode));
 
             configRoot.set(ConfigHandler.deliveryServicesKey, deliveryServicesNode);
             LOGGER.info("injectActiveChallengesInto: injected " + challengeList.size()
@@ -225,6 +192,49 @@ public class LetsEncryptDnsChallengeWatcher extends AbstractResourceWatcher {
         } catch (Exception e) {
             LOGGER.warn("injectActiveChallengesInto: failed to inject active challenges into CRConfig", e);
         }
+    }
+
+    private List<LetsEncryptDnsChallenge> readActiveChallenges(final ObjectMapper mapper, final File dbFile) throws IOException {
+        final StringBuilder sb = new StringBuilder();
+        try (BufferedReader br = new BufferedReader(new FileReader(dbFile))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                sb.append(line);
+            }
+        }
+
+        final HashMap<String, List<LetsEncryptDnsChallenge>> dataMap =
+            mapper.readValue(sb.toString(), new TypeReference<HashMap<String, List<LetsEncryptDnsChallenge>>>() { });
+        return dataMap.get("response");
+    }
+
+    private void injectSingleChallenge(final LetsEncryptDnsChallenge challenge, final ObjectMapper mapper, final ObjectNode deliveryServicesNode) {
+        final ObjectNode deliveryServiceConfig =
+            (ObjectNode) deliveryServicesNode.get(challenge.getXmlId());
+        if (deliveryServiceConfig == null) {
+            LOGGER.warn("injectActiveChallengesInto: DS '" + challenge.getXmlId() + "' not found in CRConfig; skipping");
+            return;
+        }
+
+        String staticEntryString = challenge.getFqdn();
+        final ArrayNode domains = (ArrayNode) deliveryServiceConfig.get("domains");
+        if (domains == null || domains.size() == 0) {
+            LOGGER.warn("injectActiveChallengesInto: no domains for DS '" + challenge.getXmlId() + "'; skipping");
+            return;
+        }
+
+        final Iterator<JsonNode> domainIter = domains.iterator();
+        while (domainIter.hasNext()) {
+            staticEntryString = staticEntryString.replace(domainIter.next().asText() + ".", "");
+        }
+        if (staticEntryString.endsWith(".")) {
+            staticEntryString = staticEntryString.substring(0, staticEntryString.length() - 1);
+        }
+
+        final ArrayNode updatedEntries =
+            updateStaticEntries(challenge, staticEntryString, mapper, deliveryServiceConfig);
+        deliveryServiceConfig.set("staticDnsEntries", updatedEntries);
+        deliveryServicesNode.set(challenge.getXmlId(), deliveryServiceConfig);
     }
 
     public void setConfigHandler(final ConfigHandler configHandler) {

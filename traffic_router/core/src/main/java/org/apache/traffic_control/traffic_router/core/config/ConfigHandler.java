@@ -172,8 +172,13 @@ public class ConfigHandler {
 	 */
 	@SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity", "PMD.AvoidCatchingThrowable"})
 	public boolean processConfigForDnsChallenge(final String jsonStr) throws JsonUtilsException, IOException {
-		if (jsonStr == null) {
-			LOGGER.warn("processConfigForDnsChallenge called with null JSON; skipping");
+		if (jsonStr == null || jsonStr.trim().equals("{}")) {
+			// This happens during a startup race: the watcher fired before any CRConfig was
+			// loaded (lastValidCrConfigJson == null) and the CRConfig disk file doesn't
+			// exist yet either. Passing an empty object would cause JsonUtils.getJsonNode()
+			// to throw on missing keys. Skip silently — the watcher will retry in 60s,
+			// by which time Traffic Monitor will have delivered the first real snapshot.
+			LOGGER.warn("processConfigForDnsChallenge: no valid base config available yet; skipping injection");
 			return false;
 		}
 		LOGGER.info("processConfigForDnsChallenge: applying CRConfig with injected DNS challenge");
