@@ -29,7 +29,17 @@ import org.mockito.stubbing.Answer;
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
-import org.xbill.DNS.*;
+import org.xbill.DNS.ARecord;
+import org.xbill.DNS.DClass;
+import org.xbill.DNS.Flags;
+import org.xbill.DNS.Header;
+import org.xbill.DNS.Message;
+import org.xbill.DNS.Name;
+import org.xbill.DNS.Rcode;
+import org.xbill.DNS.Record;
+import org.xbill.DNS.Section;
+import org.xbill.DNS.Type;
+import org.xbill.DNS.WireParseException;
 
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -42,7 +52,7 @@ import static org.powermock.api.mockito.PowerMockito.*;
 
 
 @RunWith(PowerMockRunner.class)
-@PrepareForTest({AbstractProtocolTest.FakeAbstractProtocol.class, Logger.class, LogManager.class, DNSAccessEventBuilder.class, Header.class, NameServer.class, DNSAccessRecord.class})
+@PrepareForTest({AbstractProtocolTest.FakeAbstractProtocol.class, Logger.class, LogManager.class, DNSAccessEventBuilder.class, Header.class, NameServer.class, DNSAccessRecord.class, Random.class})
 @PowerMockIgnore("javax.management.*")
 public class AbstractProtocolTest {
     private static Logger accessLogger = mock(Logger.class);
@@ -52,9 +62,11 @@ public class AbstractProtocolTest {
 
     @Before
     public void before() throws Exception {
-        // force the xn field in the request
-        Random random = mock(Random.class);
-        Mockito.when(random.nextInt(0xffff)).thenReturn(65535);
+        // Java 17: both mock() and spy() fail for Random due to sealed JDK internals.
+        // Use an anonymous subclass that overrides nextInt deterministically.
+        Random random = new Random() {
+            @Override public int nextInt(int bound) { return bound == 0xffff ? 65535 : super.nextInt(bound); }
+        };
         whenNew(Random.class).withNoArguments().thenReturn(random);
 
         mockStatic(System.class);

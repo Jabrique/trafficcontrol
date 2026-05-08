@@ -39,7 +39,16 @@ import org.junit.FixMethodOrder;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runners.MethodSorters;
-import org.xbill.DNS.*;
+import org.xbill.DNS.ARecord;
+import org.xbill.DNS.Lookup;
+import org.xbill.DNS.SimpleResolver;
+import org.xbill.DNS.TextParseException;
+import org.xbill.DNS.DClass;
+import org.xbill.DNS.Message;
+import org.xbill.DNS.Name;
+import org.xbill.DNS.Record;
+import org.xbill.DNS.Type;
+import org.xbill.DNS.Zone;
 
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SNIHostName;

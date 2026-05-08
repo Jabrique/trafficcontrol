@@ -29,7 +29,20 @@ import org.junit.runner.RunWith;
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
-import org.xbill.DNS.*;
+import org.xbill.DNS.ARecord;
+import org.xbill.DNS.ClientSubnetOption;
+import org.xbill.DNS.DClass;
+import org.xbill.DNS.EDNSOption;
+import org.xbill.DNS.Header;
+import org.xbill.DNS.Message;
+import org.xbill.DNS.Name;
+import org.xbill.DNS.NSRecord;
+import org.xbill.DNS.OPTRecord;
+import org.xbill.DNS.Record;
+import org.xbill.DNS.SOARecord;
+import org.xbill.DNS.Section;
+import org.xbill.DNS.Type;
+import org.xbill.DNS.Zone;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
@@ -56,7 +69,7 @@ public class NameServerTest {
     private InetAddress client;
     private TrafficRouterManager trafficRouterManager;
     private TrafficRouter trafficRouter;
-    private Record ar;
+    private org.xbill.DNS.Record ar;
     private NSRecord ns;
     
     @Before
