@@ -26,7 +26,18 @@ import org.mockito.stubbing.Answer;
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
-import org.xbill.DNS.*;
+import org.xbill.DNS.ARecord;
+import org.xbill.DNS.Header;
+import org.xbill.DNS.DClass;
+import org.xbill.DNS.Message;
+import org.xbill.DNS.Name;
+import org.xbill.DNS.Rcode;
+import org.xbill.DNS.Record;
+import org.xbill.DNS.Section;
+import org.xbill.DNS.SOARecord;
+import org.xbill.DNS.Type;
+import org.xbill.DNS.WireParseException;
+import org.xbill.DNS.Zone;
 
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -36,6 +47,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doReturn;
 import static org.powermock.api.mockito.PowerMockito.mockStatic;
 import static org.powermock.api.mockito.PowerMockito.spy;
 import static org.powermock.api.mockito.PowerMockito.whenNew;
@@ -52,8 +64,11 @@ public class DNSAccessEventBuilderTest {
     public void before() throws Exception {
         mockStatic(System.class);
 
-        Random random = mock(Random.class);
-        when(random.nextInt(0xffff)).thenReturn(65535);
+        // Java 17: both mock() and spy() fail for Random due to sealed JDK internals.
+        // Use an anonymous subclass that overrides nextInt deterministically.
+        Random random = new Random() {
+            @Override public int nextInt(int bound) { return bound == 0xffff ? 65535 : super.nextInt(bound); }
+        };
         whenNew(Random.class).withNoArguments().thenReturn(random);
 
         client = mock(InetAddress.class);

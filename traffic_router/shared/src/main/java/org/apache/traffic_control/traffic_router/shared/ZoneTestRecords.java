@@ -17,7 +17,17 @@ package org.apache.traffic_control.traffic_router.shared;
 
 import org.apache.traffic_control.traffic_router.secure.BindPrivateKey;
 import org.apache.traffic_control.traffic_router.secure.Pkcs1KeySpecDecoder;
-import org.xbill.DNS.*;
+import org.xbill.DNS.ARecord;
+import org.xbill.DNS.AAAARecord;
+import org.xbill.DNS.CNAMERecord;
+import org.xbill.DNS.DClass;
+import org.xbill.DNS.DNSSEC;
+import org.xbill.DNS.DNSKEYRecord;
+import org.xbill.DNS.Name;
+import org.xbill.DNS.NSRecord;
+import org.xbill.DNS.Record;
+import org.xbill.DNS.SOARecord;
+import org.xbill.DNS.TXTRecord;
 
 import java.io.IOException;
 import java.net.Inet6Address;
@@ -41,7 +51,7 @@ import static java.util.Base64.getMimeDecoder;
 
 @SuppressWarnings("PMD.ClassNamingConventions")
 public class ZoneTestRecords {
-	public static List<Record> records;
+	public static List<org.xbill.DNS.Record> records;
 
 	public static Date start;
 	public static Date expiration;
@@ -73,7 +83,7 @@ public class ZoneTestRecords {
 		return new KeyPair(publicKeyCopy, privateKeyCopy);
 	}
 
-	public static List<Record> generateZoneRecords(final boolean makeNewKeyPairs) throws IOException, GeneralSecurityException {
+	public static List<org.xbill.DNS.Record> generateZoneRecords(final boolean makeNewKeyPairs) throws IOException, GeneralSecurityException {
 		start = new Date(System.currentTimeMillis() - (24 * 3600 * 1000));
 		expiration = new Date(System.currentTimeMillis() + (7 * 24 * 3600 * 1000));
 
