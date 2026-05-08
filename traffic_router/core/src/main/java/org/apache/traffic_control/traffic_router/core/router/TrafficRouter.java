@@ -736,10 +736,15 @@ public class TrafficRouter {
 			return null;
 		}
 
+		// WRAP 1: DS unavailable / bypass destination path.
+		// Defensive copy required: getFailureDnsResponse() returns the shared
+		// 'redirectInetRecords' singleton. addAddresses() appends NS records to
+		// that list in-place, growing it unboundedly on each request (memory leak).
 		if (!ds.isAvailable()) {
-			result.setAddresses(ds.getFailureDnsResponse(request, track));
+			final List<InetRecord> failureAddrs = ds.getFailureDnsResponse(request, track);
+			result.setAddresses(failureAddrs != null ? new ArrayList<>(failureAddrs) : new ArrayList<>());
 			result.addAddresses(selectTrafficRouters(request, ds));
-			return result;
+			return ensureDualStackAnchor(result, request, ds);
 		}
 
 		final IPVersions requestVersion = request.getQueryType() == Type.AAAA ? IPVersions.IPV6ONLY : IPVersions.IPV4ONLY;
@@ -751,15 +756,20 @@ public class TrafficRouter {
 			track.setClientGeolocation(cacheLocation.getGeolocation());
 			result.setAddresses(inetRecordsFromCaches(ds, caches, request));
 			result.addAddresses(selectTrafficRouters(request, ds));
-			return result;
+			// CZ hit: if AAAA query resolved to A-only caches, DSI adds anchor
+			return ensureDualStackAnchor(result, request, ds);
 		}
 
+		// WRAP 2: CZ-only DS with no CZ caches.
+		// Defensive copy for same singleton-mutation reason as WRAP 1.
 		if (ds.isCoverageZoneOnly()) {
 			track.setResult(ResultType.MISS);
 			track.setResultDetails(ResultDetails.DS_CZ_ONLY);
-			result.setAddresses(ds.getFailureDnsResponse(request, track));
+			final List<InetRecord> czFailureAddrs = ds.getFailureDnsResponse(request, track);
+			result.setAddresses(czFailureAddrs != null ? new ArrayList<>(czFailureAddrs) : new ArrayList<>());
 			result.addAddresses(selectTrafficRouters(request, ds));
-			return result;
+			// For CZ-only DS, DSI guard inside ensureDualStackAnchor will skip GEO
+			return ensureDualStackAnchor(result, request, ds);
 		}
 
 		try {
@@ -778,16 +788,116 @@ public class TrafficRouter {
 			caches = selectCachesByGeo(request.getClientIP(), ds, cacheLocation, track, requestVersion);
 		}
 
+		// WRAP 3+4: GEO hit or full MISS.
 		if (caches != null) {
 			track.setResult(ResultType.GEO);
 			result.setAddresses(inetRecordsFromCaches(ds, caches, request));
 		} else {
+			// WRAP 4: MISS — defensive copy required (same singleton issue)
 			track.setResult(ResultType.MISS);
-			result.setAddresses(ds.getFailureDnsResponse(request, track));
+			final List<InetRecord> missAddrs = ds.getFailureDnsResponse(request, track);
+			result.setAddresses(missAddrs != null ? new ArrayList<>(missAddrs) : new ArrayList<>());
 		}
 
 		result.addAddresses(selectTrafficRouters(request, ds));
+		return ensureDualStackAnchor(result, request, ds);
+	}
 
+	/**
+	 * Isolated Dual-Stack Inclusion (DSI) — RFC 2308 Compliance.
+	 *
+	 * <p>Guarantees that an AAAA query for an IPv4-only Delivery Service receives
+	 * an RFC 2308 §2.1 NODATA response (NXRRSET) instead of NXDOMAIN.</p>
+	 *
+	 * <p><strong>Why NXDOMAIN is a violation:</strong> When no routing name exists
+	 * in the dynamic zone (because no AAAA records were produced), the static zone
+	 * has no record either, so the NameServer returns NXDOMAIN. Windows DNS clients
+	 * cache that negative result for the full negative TTL, blocking all subsequent
+	 * A (IPv4) lookups — a complete service outage from the client's perspective.</p>
+	 *
+	 * <p><strong>DSI fix:</strong> Adds IPv4 anchor A records into the route result.
+	 * These anchor records cause the dynamic zone generator to create an entry for
+	 * the routing name, allowing the NameServer to find the name and reply NODATA
+	 * for AAAA instead of NXDOMAIN. The A records themselves appear only in the
+	 * zone apex (anchor section) and are not served in the ANSWER section of the
+	 * AAAA query (zero IP leak).</p>
+	 *
+	 * <p><strong>Guards:</strong></p>
+	 * <ul>
+	 *   <li>No-op for A (IPv4) queries — only AAAA queries trigger DSI.</li>
+	 *   <li>No-op when result already contains A records (bypass destination
+	 *       already provides IPs — DSI not needed).</li>
+	 *   <li>Phase 2 GEO disabled for {@code coverageZoneOnly} DS — policy must
+	 *       be respected even in fallback.</li>
+	 *   <li>Uses isolated {@code anchorTrack} to prevent DSI lookups from
+	 *       polluting primary route StatTracker metrics.</li>
+	 * </ul>
+	 *
+	 * @param result  the route result to potentially augment with anchor records
+	 * @param request the original DNS request
+	 * @param ds      the Delivery Service being routed
+	 * @return the result, potentially augmented with IPv4 anchor records
+	 */
+	@SuppressWarnings("PMD.NPathComplexity")
+	private DNSRouteResult ensureDualStackAnchor(
+			final DNSRouteResult result,
+			final DNSRequest request,
+			final DeliveryService ds) throws GeolocationException {
+
+		// Guard 1: Only AAAA queries can produce NXDOMAIN for IPv4-only DS.
+		if (request.getQueryType() != Type.AAAA) {
+			return result;
+		}
+
+		// Guard 2: If the result already has A (IPv4) records, the routing name
+		// will be anchored — no NXDOMAIN risk. Short-circuit to avoid extra work.
+		if (result.getAddresses() != null) {
+			for (final InetRecord rec : result.getAddresses()) {
+				if (rec.isInet4()) {
+					return result;
+				}
+			}
+		}
+
+		// Phase 1: Try CZ lookup with IPv4 version (isolated Track — no metric pollution)
+		final Track anchorTrack = new Track();
+		List<Cache> anchorCaches = null;
+
+		// Re-use the caller's cacheLocation if it was resolved for IPv6 — we need
+		// a separate IPv4 CZ lookup because the CZ zones may differ per address family.
+		final CacheLocation ipv4CL = getCoverageZoneCacheLocation(
+				request.getClientIP(), ds, IPVersions.IPV4ONLY);
+
+		if (ipv4CL != null) {
+			// Use public 3-arg overload (no track) — DSI uses isolated anchorTrack internally
+			// and does not need to propagate CZ result type via the track mechanism.
+			anchorCaches = selectCachesByCZ(ds, ipv4CL, IPVersions.IPV4ONLY);
+		}
+
+		// Phase 2: GEO fallback — only if DS is not CZ-only (respect policy)
+		if (anchorCaches == null && !ds.isCoverageZoneOnly() && anchorTrack.continueGeo) {
+			anchorCaches = selectCachesByGeo(
+					request.getClientIP(), ds, ipv4CL, anchorTrack, IPVersions.IPV4ONLY);
+		}
+
+		if (anchorCaches == null || anchorCaches.isEmpty()) {
+			// No IPv4 caches found anywhere — DS is truly unreachable.
+			// Return result as-is; NameServer will serve NXDOMAIN. This is
+			// acceptable because the DS has no healthy caches at all.
+			return result;
+		}
+
+		// Collect IPv4 A records from anchor caches (TTL from DS config)
+		final List<InetRecord> anchors = inetRecordsFromCaches(ds, anchorCaches, request);
+		if (anchors == null || anchors.isEmpty()) {
+			return result;
+		}
+
+		// Add anchor A records to result. NameServer uses these to synthesize
+		// the routing name entry in the dynamic zone, enabling NODATA for AAAA.
+		// Note: these records appear in the zone's anchor section only, NOT in
+		// the AAAA ANSWER section — no IP addresses are leaked to the client.
+		result.addAddresses(anchors);
 		return result;
 	}
 
