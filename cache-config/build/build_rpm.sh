@@ -127,6 +127,12 @@ initBuildArea() {
 		buildManpage 't3c-preprocess';
 	)
 
+	(
+		cd t3c-vector;
+		go build -v -gcflags "$gcflags" -ldflags "${ldflags} -X main.GitRevision=$(git rev-parse HEAD) -X main.BuildTimestamp=$(date +'%Y-%M-%dT%H:%M:%s') -X main.Version=${TC_VERSION}";
+		buildManpage 't3c-vector';
+	)
+
 	mkdir -p "${dest}/build";
 
 	echo "build_rpm.sh lsing for logrotate";
