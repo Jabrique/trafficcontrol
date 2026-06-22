@@ -55,6 +55,12 @@ const LineCommentHeaderRewriteDotConfig = LineCommentHash
 // Note this is internal, and will never be set in an HTTP Request or Response by ATS.
 const ServiceCategoryHeader = "@CDN-SVC"
 
+// TenantHeader is the internal Traffic Ops tenant header for billing telemetry.
+// Unlike ServiceCategory, Tenant is a mandatory foreign key in Traffic Ops and cannot
+// be empty, making this header more reliable for per-tenant log attribution.
+// This is an ATS-internal header (@ prefix) and will never appear in client-facing HTTP.
+const TenantHeader = "@CDN-TENANT"
+
 // MaxOriginConnectionsNoMax is a value specially interpreted by ATS to mean "no
 // maximum origin connections".
 //
@@ -606,7 +612,9 @@ var returnRe = regexp.MustCompile(`\s*__RETURN__\s*`)
 // The headerRewriteTxt is the custom header rewrite from the Delivery Service. This should be used for any logic that depends on it. The various header rewrite fields (EdgeHeaderRewrite, InnerHeaderRewrite, etc should never be used inside this function, since this function doesn't know what tier the server is at. This function should not insert the headerRewriteText, but may use it to make decisions about what to insert.
 func makeATCHeaderRewriteDirectives(ds *DeliveryService, headerRewriteTxt *string, serverIsLastTier bool, numLastTierServers int, atsMajorVersion uint, atsRqstMaxHdrSize int) string {
 	return makeATCHeaderRewriteDirectiveMaxOriginConns(ds, headerRewriteTxt, serverIsLastTier, numLastTierServers, atsMajorVersion) +
-		makeATCHeaderRewriteDirectiveServiceCategoryHdr(ds, headerRewriteTxt) + makeATCHeaderRewriteDirectiveMaxRequestHeaderSize(ds, serverIsLastTier, atsRqstMaxHdrSize)
+		makeATCHeaderRewriteDirectiveServiceCategoryHdr(ds, headerRewriteTxt) +
+		makeATCHeaderRewriteDirectiveTenantHdr(ds, headerRewriteTxt) +
+		makeATCHeaderRewriteDirectiveMaxRequestHeaderSize(ds, serverIsLastTier, atsRqstMaxHdrSize)
 }
 
 // makeATCHeaderRewriteDirectiveMaxOriginConns generates the Max Origin Connections header rewrite text, which may be empty.
@@ -654,6 +662,28 @@ func makeATCHeaderRewriteDirectiveServiceCategoryHdr(ds *DeliveryService, header
 	return `
 cond %{REMAP_PSEUDO_HOOK}
 set-header ` + ServiceCategoryHeader + ` "` + ds.XMLID + `|` + escapedServiceCategory + `"
+`
+}
+
+// makeATCHeaderRewriteDirectiveTenantHdr generates the header rewrite directive
+// to inject the native Traffic Ops Tenant name as @CDN-TENANT.
+// Tenant is a required foreign key in Traffic Ops (unlike ServiceCategory which is optional),
+// making this header more reliable for billing telemetry attribution.
+// Guard pattern mirrors makeATCHeaderRewriteDirectiveServiceCategoryHdr:
+// - skip if Tenant is nil or empty (defensive, should not happen in practice)
+// - skip if the custom header rewrite already contains the header (no double-injection)
+func makeATCHeaderRewriteDirectiveTenantHdr(ds *DeliveryService, headerRewriteTxt *string) string {
+	if (ds.Tenant == nil || *ds.Tenant == "") ||
+		(headerRewriteTxt != nil && strings.Contains(*headerRewriteTxt, TenantHeader)) { // if the custom header rewrite already contains the tenant header, don't add another one
+		return ""
+	}
+	// Escape the Tenant name, which is user input, to prevent header injection exploits.
+	// url.PathEscape is more conservative than strictly necessary, but Go lacks a dedicated
+	// header value escape function, and valid path characters are a subset of valid header values.
+	escapedTenant := url.PathEscape(*ds.Tenant)
+	return `
+cond %{REMAP_PSEUDO_HOOK}
+set-header ` + TenantHeader + ` "` + ds.XMLID + `|` + escapedTenant + `"
 `
 }
 

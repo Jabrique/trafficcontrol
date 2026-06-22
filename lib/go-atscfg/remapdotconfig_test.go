@@ -10087,3 +10087,143 @@ map http://foo/ http://bar/`
 		}
 	}
 }
+
+// --- TDD: remap.config hdr_rw entry triggered by Tenant alone ---
+
+// TestMakeRemapDotConfigEdgeTenantOnlyTriggersHdrRw verifies that an edge DS
+// with Tenant set but no ServiceCategory, no EdgeHeaderRewrite, and no
+// MaxOriginConnections still generates the @plugin=header_rewrite.so
+// @pparam=hdr_rw_<ds>.config entry in remap.config.
+//
+// Before this fix, remap.config only included the header_rewrite plugin entry
+// when ServiceCategory or EdgeHeaderRewrite was set. A DS with only Tenant set
+// would have @CDN-TENANT in its hdr_rw_*.config file but remap.config would
+// never load it, so the header would never be injected.
+func TestMakeRemapDotConfigEdgeTenantOnlyTriggersHdrRw(t *testing.T) {
+	hdr := "myHeaderComment"
+
+	server := makeTestRemapServer()
+	server.Type = "EDGE"
+	servers := []Server{}
+
+	ds := DeliveryService{}
+	ds.ID = util.Ptr(48)
+	dsType := "HTTP_LIVE"
+	ds.Type = &dsType
+	ds.OrgServerFQDN = util.Ptr("origin.example.test")
+	ds.XMLID = "tenant-only-ds"
+	ds.Tenant = util.Ptr("wowrack") // Tenant set, no ServiceCategory
+	ds.RangeRequestHandling = util.Ptr(0)
+	ds.QStringIgnore = util.Ptr(0)
+	ds.FQPacingRate = util.Ptr(0)
+	ds.DSCP = 0
+	ds.RoutingName = "myroutingname"
+	ds.MultiSiteOrigin = false
+	ds.ProfileID = util.Ptr(49)
+	ds.Protocol = util.Ptr(int(tc.DSProtocolHTTP))
+	ds.AnonymousBlockingEnabled = false
+	ds.Active = tc.DSActiveStateActive
+
+	dss := []DeliveryServiceServer{
+		{Server: server.ID, DeliveryService: *ds.ID},
+	}
+	dses := []DeliveryService{ds}
+
+	dsRegexes := []tc.DeliveryServiceRegexes{
+		{
+			DSName: ds.XMLID,
+			Regexes: []tc.DeliveryServiceRegex{
+				{Type: string(tc.DSMatchTypeHostRegex), SetNumber: 0, Pattern: ".*\\.tenant-only\\..*"},
+			},
+		},
+	}
+
+	serverParams := []tc.ParameterV5{
+		{Name: "trafficserver", ConfigFile: "package", Value: "9", Profiles: []byte(`["global"]`)},
+	}
+	remapConfigParams := []tc.ParameterV5{}
+	cdn := &tc.CDNV5{DomainName: "cdndomain.example", Name: "my-cdn-name"}
+	topologies := []tc.TopologyV5{}
+	cgs := []tc.CacheGroupNullableV5{}
+	serverCapabilities := map[int]map[ServerCapability]struct{}{}
+	dsRequiredCapabilities := map[int]map[ServerCapability]struct{}{}
+	configDir := `/opt/trafficserver/etc/trafficserver`
+
+	cfg, err := MakeRemapDotConfig(server, servers, dses, dss, dsRegexes, serverParams, cdn, remapConfigParams, topologies, cgs, serverCapabilities, dsRequiredCapabilities, configDir, &RemapDotConfigOpts{HdrComment: hdr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	txt := cfg.Text
+
+	// The hdr_rw plugin entry must appear in remap.config so ATS loads the
+	// generated hdr_rw_tenant-only-ds.config file that contains @CDN-TENANT.
+	expectedHdrRw := "hdr_rw_tenant-only-ds.config"
+	if !strings.Contains(txt, expectedHdrRw) {
+		t.Errorf("expected remap.config to contain '%s' for Tenant-only DS, got:\n%s", expectedHdrRw, txt)
+	}
+}
+
+// TestMakeRemapDotConfigMidTenantOnlyTriggersHdrRw verifies that a mid-tier DS
+// with Tenant set but no MidHeaderRewrite and no MaxOriginConnections still
+// generates the @plugin=header_rewrite.so @pparam=hdr_rw_mid_<ds>.config
+// entry in remap.config.
+func TestMakeRemapDotConfigMidTenantOnlyTriggersHdrRw(t *testing.T) {
+	hdr := "myHeaderComment"
+
+	server := makeTestRemapServer() // type=MID by default in makeTestRemapServer
+	servers := []Server{}
+
+	ds := DeliveryService{}
+	ds.ID = util.Ptr(48)
+	dsType := "HTTP_LIVE_NATNL" // type that uses mid cache
+	ds.Type = &dsType
+	ds.OrgServerFQDN = util.Ptr("origin.example.test")
+	ds.XMLID = "tenant-only-mid-ds"
+	ds.Tenant = util.Ptr("acme") // Tenant set, no MidHeaderRewrite
+	ds.RangeRequestHandling = util.Ptr(0)
+	ds.QStringIgnore = util.Ptr(0)
+	ds.FQPacingRate = util.Ptr(0)
+	ds.DSCP = 0
+	ds.RoutingName = "myroutingname"
+	ds.MultiSiteOrigin = false
+	ds.ProfileID = util.Ptr(49)
+	ds.Protocol = util.Ptr(int(tc.DSProtocolHTTP))
+	ds.AnonymousBlockingEnabled = false
+	ds.Active = tc.DSActiveStateActive
+
+	dss := []DeliveryServiceServer{
+		{Server: server.ID, DeliveryService: *ds.ID},
+	}
+	dses := []DeliveryService{ds}
+
+	dsRegexes := []tc.DeliveryServiceRegexes{
+		{
+			DSName: ds.XMLID,
+			Regexes: []tc.DeliveryServiceRegex{
+				{Type: string(tc.DSMatchTypeHostRegex), SetNumber: 0, Pattern: ".*\\.tenant-only-mid\\..*"},
+			},
+		},
+	}
+
+	serverParams := []tc.ParameterV5{
+		{Name: "trafficserver", ConfigFile: "package", Value: "9", Profiles: []byte(`["global"]`)},
+	}
+	remapConfigParams := []tc.ParameterV5{}
+	cdn := &tc.CDNV5{DomainName: "cdndomain.example", Name: "my-cdn-name"}
+	topologies := []tc.TopologyV5{}
+	cgs := []tc.CacheGroupNullableV5{}
+	serverCapabilities := map[int]map[ServerCapability]struct{}{}
+	dsRequiredCapabilities := map[int]map[ServerCapability]struct{}{}
+	configDir := `/opt/trafficserver/etc/trafficserver`
+
+	cfg, err := MakeRemapDotConfig(server, servers, dses, dss, dsRegexes, serverParams, cdn, remapConfigParams, topologies, cgs, serverCapabilities, dsRequiredCapabilities, configDir, &RemapDotConfigOpts{HdrComment: hdr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	txt := cfg.Text
+
+	expectedHdrRw := "hdr_rw_mid_tenant-only-mid-ds.config"
+	if !strings.Contains(txt, expectedHdrRw) {
+		t.Errorf("expected remap.config to contain '%s' for mid Tenant-only DS, got:\n%s", expectedHdrRw, txt)
+	}
+}

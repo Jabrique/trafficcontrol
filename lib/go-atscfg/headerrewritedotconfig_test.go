@@ -788,3 +788,157 @@ func makeHdrRwServerParams() []tc.ParameterV5 {
 	}
 	return serverParams
 }
+
+// --- TDD: @CDN-TENANT header injection tests ---
+// Tests 1-6 are written before the implementation (TDD red phase).
+// They will compile-error until TenantHeader and makeATCHeaderRewriteDirectiveTenantHdr are added.
+
+// TestMakeATCHeaderRewriteDirectiveTenantHdr verifies the normal case:
+// tenant is set, no custom header rewrite conflict -- directive should be produced.
+func TestMakeATCHeaderRewriteDirectiveTenantHdr(t *testing.T) {
+	ds := makeGenericDS()
+	ds.XMLID = "test-ds"
+	ds.Tenant = util.Ptr("MyTenant")
+
+	result := makeATCHeaderRewriteDirectiveTenantHdr(ds, nil)
+
+	if !strings.Contains(result, TenantHeader) {
+		t.Errorf("expected tenant header '%s' in output, got: '%s'", TenantHeader, result)
+	}
+	if !strings.Contains(result, "test-ds|MyTenant") {
+		t.Errorf("expected 'test-ds|MyTenant' in output, got: '%s'", result)
+	}
+	if !strings.Contains(result, "cond %{REMAP_PSEUDO_HOOK}") {
+		t.Errorf("expected REMAP_PSEUDO_HOOK condition in output, got: '%s'", result)
+	}
+}
+
+// TestMakeATCHeaderRewriteDirectiveTenantHdrEmpty verifies that an empty-string
+// tenant pointer produces empty output (defensive guard).
+func TestMakeATCHeaderRewriteDirectiveTenantHdrEmpty(t *testing.T) {
+	ds := makeGenericDS()
+	ds.Tenant = util.Ptr("")
+
+	result := makeATCHeaderRewriteDirectiveTenantHdr(ds, nil)
+
+	if result != "" {
+		t.Errorf("expected empty result for empty tenant, got: '%s'", result)
+	}
+}
+
+// TestMakeATCHeaderRewriteDirectiveTenantHdrNil verifies that a nil tenant
+// (the default from makeGenericDS) produces empty output.
+func TestMakeATCHeaderRewriteDirectiveTenantHdrNil(t *testing.T) {
+	ds := makeGenericDS()
+	// ds.Tenant is nil by default -- no need to set it.
+
+	result := makeATCHeaderRewriteDirectiveTenantHdr(ds, nil)
+
+	if result != "" {
+		t.Errorf("expected empty result for nil tenant, got: '%s'", result)
+	}
+}
+
+// TestMakeATCHeaderRewriteDirectiveTenantHdrManualOverride verifies that when
+// the custom header rewrite already contains @CDN-TENANT, the function does NOT
+// inject a duplicate directive.
+func TestMakeATCHeaderRewriteDirectiveTenantHdrManualOverride(t *testing.T) {
+	ds := makeGenericDS()
+	ds.Tenant = util.Ptr("MyTenant")
+	customHdrRw := `cond %{REMAP_PSEUDO_HOOK}
+set-header @CDN-TENANT "custom-override|ManualTenant"`
+
+	result := makeATCHeaderRewriteDirectiveTenantHdr(ds, &customHdrRw)
+
+	if result != "" {
+		t.Errorf("expected empty result when custom hdr_rw already contains %s, got: '%s'", TenantHeader, result)
+	}
+}
+
+// TestMakeATCHeaderRewriteDirectiveTenantHdrEscape verifies that a tenant name
+// containing header-injection characters (CRLF) is sanitized by url.PathEscape,
+// preventing HTTP header injection. url.PathEscape converts \r\n to %0D%0A,
+// which is safe in a header value but cannot be interpreted as a new header line.
+func TestMakeATCHeaderRewriteDirectiveTenantHdrEscape(t *testing.T) {
+	ds := makeGenericDS()
+	ds.XMLID = "test-ds"
+	ds.Tenant = util.Ptr("Evil\r\nX-Injected: pwned")
+
+	result := makeATCHeaderRewriteDirectiveTenantHdr(ds, nil)
+
+	// The raw CRLF sequence must not appear -- it must be percent-encoded.
+	if strings.Contains(result, "\r\n") {
+		t.Errorf("expected CRLF to be percent-encoded, got raw CRLF in output: '%s'", result)
+	}
+	// The header directive itself must still be present.
+	if !strings.Contains(result, TenantHeader) {
+		t.Errorf("expected %s to still appear in output after escaping, got: '%s'", TenantHeader, result)
+	}
+	// The percent-encoded form of CRLF must be present, confirming the escape worked.
+	if !strings.Contains(result, "%0D%0A") {
+		t.Errorf("expected %%0D%%0A (percent-encoded CRLF) in output, got: '%s'", result)
+	}
+}
+
+// TestMakeHeaderRewriteDotConfigTenantIntegration is a full integration test
+// through MakeHeaderRewriteDotConfig. It verifies that both @CDN-SVC and
+// @CDN-TENANT appear in the final generated hdr_rw_*.config text when both
+// ServiceCategory and Tenant are set on the Delivery Service.
+func TestMakeHeaderRewriteDotConfigTenantIntegration(t *testing.T) {
+	xmlID := "xml-id"
+	fileName := "hdr_rw_" + xmlID + ".config"
+	cdnName := "mycdn"
+
+	server := makeGenericServer()
+	server.CDN = cdnName
+	server.HostName = "my-edge"
+	server.ID = 990
+	server.Status = string(tc.CacheStatusReported)
+
+	ds := makeGenericDS()
+	ds.EdgeHeaderRewrite = util.Ptr("edgerewrite")
+	ds.ID = util.Ptr(240)
+	ds.XMLID = xmlID
+	ds.MaxOriginConnections = util.Ptr(42)
+	ds.CDNName = &cdnName
+	dsType := "HTTP_LIVE"
+	ds.Type = &dsType
+	ds.ServiceCategory = util.Ptr("servicecategory")
+	ds.Tenant = util.Ptr("billing-tenant")
+
+	sv1 := makeGenericServer()
+	sv1.HostName = "my-edge-1"
+	sv1.CDN = cdnName
+	sv1.ID = 991
+	sv1.Status = string(tc.CacheStatusOnline)
+
+	servers := []Server{*server, *sv1}
+	dses := []DeliveryService{*ds}
+	dss := makeDSS(servers, dses)
+
+	topologies := []tc.TopologyV5{}
+	serverParams := makeHdrRwServerParams()
+	cgs := []tc.CacheGroupNullableV5{}
+	serverCaps := map[int]map[ServerCapability]struct{}{}
+	dsRequiredCaps := map[int]map[ServerCapability]struct{}{}
+
+	cfg, err := MakeHeaderRewriteDotConfig(fileName, dses, dss, server, servers, cgs, serverParams, serverCaps, dsRequiredCaps, topologies, &HeaderRewriteDotConfigOpts{HdrComment: "test"})
+	if err != nil {
+		t.Fatalf("MakeHeaderRewriteDotConfig error: %v", err)
+	}
+
+	txt := cfg.Text
+
+	// ServiceCategory header must still be present (no regression).
+	if !strings.Contains(txt, "xml-id|servicecategory") {
+		t.Errorf("expected @CDN-SVC 'xml-id|servicecategory' in output, got:\n%s", txt)
+	}
+
+	// Tenant header must be present.
+	if !strings.Contains(txt, TenantHeader) {
+		t.Errorf("expected %s in output, got:\n%s", TenantHeader, txt)
+	}
+	if !strings.Contains(txt, "xml-id|billing-tenant") {
+		t.Errorf("expected @CDN-TENANT 'xml-id|billing-tenant' in output, got:\n%s", txt)
+	}
+}
