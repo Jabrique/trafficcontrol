@@ -404,7 +404,7 @@ func getServerConfigRemapDotConfigForMid(
 				return "", warnings, err
 			}
 			remapTags.HeaderRewrite = topoTxt
-		} else if (ds.MidHeaderRewrite != nil && *ds.MidHeaderRewrite != "") || (ds.MaxOriginConnections != nil && *ds.MaxOriginConnections > 0) || (ds.ServiceCategory != nil && *ds.ServiceCategory != "") {
+		} else if (ds.MidHeaderRewrite != nil && *ds.MidHeaderRewrite != "") || (ds.MaxOriginConnections != nil && *ds.MaxOriginConnections > 0) || (ds.ServiceCategory != nil && *ds.ServiceCategory != "") || (ds.Tenant != nil && *ds.Tenant != "") {
 			remapTags.HeaderRewrite = `@plugin=header_rewrite.so @pparam=` + midHeaderRewriteConfigFileName(ds.XMLID)
 		}
 
@@ -703,7 +703,7 @@ func buildEdgeRemapLine(
 			return remapLines, warnings, err
 		}
 		remapTags.HeaderRewrite = topoTxt
-	} else if (ds.EdgeHeaderRewrite != nil && *ds.EdgeHeaderRewrite != "") || (ds.ServiceCategory != nil && *ds.ServiceCategory != "") || (ds.MaxOriginConnections != nil && *ds.MaxOriginConnections != 0) {
+	} else if (ds.EdgeHeaderRewrite != nil && *ds.EdgeHeaderRewrite != "") || (ds.ServiceCategory != nil && *ds.ServiceCategory != "") || (ds.MaxOriginConnections != nil && *ds.MaxOriginConnections != 0) || (ds.Tenant != nil && *ds.Tenant != "") {
 		remapTags.HeaderRewrite = `@plugin=header_rewrite.so @pparam=` + edgeHeaderRewriteConfigFileName(ds.XMLID)
 	}
 
@@ -864,13 +864,13 @@ func makeDSTopologyHeaderRewriteTxt(ds DeliveryService, cg tc.CacheGroupName, to
 	}
 	txt := ""
 	const pluginTxt = `@plugin=header_rewrite.so @pparam=`
-	if placement.IsFirstCacheTier && ((ds.FirstHeaderRewrite != nil && *ds.FirstHeaderRewrite != "") || (ds.ServiceCategory != nil && *ds.ServiceCategory != "")) {
+	if placement.IsFirstCacheTier && ((ds.FirstHeaderRewrite != nil && *ds.FirstHeaderRewrite != "") || (ds.ServiceCategory != nil && *ds.ServiceCategory != "") || (ds.Tenant != nil && *ds.Tenant != "")) {
 		txt += pluginTxt + FirstHeaderRewriteConfigFileName(ds.XMLID) + ` `
 	}
-	if placement.IsInnerCacheTier && ((ds.InnerHeaderRewrite != nil && *ds.InnerHeaderRewrite != "") || (ds.ServiceCategory != nil && *ds.ServiceCategory != "")) {
+	if placement.IsInnerCacheTier && ((ds.InnerHeaderRewrite != nil && *ds.InnerHeaderRewrite != "") || (ds.ServiceCategory != nil && *ds.ServiceCategory != "") || (ds.Tenant != nil && *ds.Tenant != "")) {
 		txt += pluginTxt + InnerHeaderRewriteConfigFileName(ds.XMLID) + ` `
 	}
-	if placement.IsLastCacheTier && ((ds.LastHeaderRewrite != nil && *ds.LastHeaderRewrite != "") || (ds.ServiceCategory != nil && *ds.ServiceCategory != "") || (ds.MaxOriginConnections != nil && *ds.MaxOriginConnections != 0)) {
+	if placement.IsLastCacheTier && ((ds.LastHeaderRewrite != nil && *ds.LastHeaderRewrite != "") || (ds.ServiceCategory != nil && *ds.ServiceCategory != "") || (ds.MaxOriginConnections != nil && *ds.MaxOriginConnections != 0) || (ds.Tenant != nil && *ds.Tenant != "")) {
 		txt += pluginTxt + LastHeaderRewriteConfigFileName(ds.XMLID) + ` `
 	}
 	return txt, nil
