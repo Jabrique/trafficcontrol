@@ -49,6 +49,14 @@ type Cfg struct {
 	ReloadCommand       string // optional shell command to trigger Vector reload
 	DryRun              bool   // print changes without writing
 
+	// Database downloader
+	// DatabaseConfigFileKey is the Traffic Ops Parameter.ConfigFile value that
+	// identifies database download entries. Each such parameter has:
+	//   Name  = local filename stem (e.g. "geoip_city" -> geoip_city.mmdb)
+	//   Value = HTTPS URL to download from
+	DatabaseConfigFileKey string
+	DatabaseDir           string // directory to store downloaded database files
+
 	// Logging
 	LogLocationError   string
 	LogLocationWarning string
@@ -69,6 +77,14 @@ const DefaultConfigFileKey = "vector-tenant.yaml"
 // fields from the raw access log. Matches the main vector.yaml transform name.
 const DefaultUpstreamTransformID = "extract_billing"
 
+// DefaultDatabaseDir is the default directory for downloaded database files.
+// Placed inside /etc/vector/ so all Vector-related files are co-located.
+const DefaultDatabaseDir = "/etc/vector/database"
+
+// DefaultDatabaseConfigFileKey is the Traffic Ops Parameter.ConfigFile value
+// that identifies database download entries (Name=stem, Value=URL).
+const DefaultDatabaseConfigFileKey = "vector_database"
+
 // ErrorLog implements log.Config.
 func (cfg Cfg) ErrorLog() log.LogLocation { return log.LogLocation(cfg.LogLocationError) }
 
@@ -87,16 +103,18 @@ func (cfg Cfg) EventLog() log.LogLocation { return log.LogLocation(log.LogLocati
 // GetCfg parses CLI flags and environment variables, returning a validated Cfg.
 func GetCfg(appName, version, gitRevision string) (Cfg, error) {
 	cfg := Cfg{
-		Version:             version,
-		GitRevision:         gitRevision,
-		ConfigFileKey:       DefaultConfigFileKey,
-		OutputDir:           DefaultOutputDir,
-		UpstreamTransformID: DefaultUpstreamTransformID,
-		TOInsecure:          false,
-		TOTimeout:           30 * time.Second,
-		LogLocationError:    "stderr",
-		LogLocationWarning:  "stderr",
-		LogLocationInfo:     "stderr",
+		Version:               version,
+		GitRevision:           gitRevision,
+		ConfigFileKey:         DefaultConfigFileKey,
+		OutputDir:             DefaultOutputDir,
+		UpstreamTransformID:   DefaultUpstreamTransformID,
+		DatabaseDir:           DefaultDatabaseDir,
+		DatabaseConfigFileKey: DefaultDatabaseConfigFileKey,
+		TOInsecure:            false,
+		TOTimeout:             30 * time.Second,
+		LogLocationError:      "stderr",
+		LogLocationWarning:    "stderr",
+		LogLocationInfo:       "stderr",
 	}
 
 	toURL := getopt.StringLong("traffic-ops-url", 'u', "", "Traffic Ops URL (required). Env: TO_URL")
@@ -116,6 +134,10 @@ func GetCfg(appName, version, gitRevision string) (Cfg, error) {
 	reloadCmd := getopt.StringLong("reload-command", 'r', "",
 		"Shell command to run after config changes (leave empty when --watch-config is used)")
 	dryRun := getopt.BoolLong("dry-run", 'd', "Print changes without writing files or running reload")
+	databaseDir := getopt.StringLong("database-dir", 'D', DefaultDatabaseDir,
+		"Directory to store downloaded database files (e.g. MMDB)")
+	databaseConfigFileKey := getopt.StringLong("database-config-file-key", 'K', DefaultDatabaseConfigFileKey,
+		"Traffic Ops Parameter.ConfigFile value identifying database download entries")
 	logError := getopt.StringLong("log-location-error", 'l', "stderr", "Log location for error messages")
 	logWarn := getopt.StringLong("log-location-warning", 'w', "stderr", "Log location for warning messages")
 	logInfo := getopt.StringLong("log-location-info", 'f', "stderr", "Log location for info messages")
@@ -155,6 +177,8 @@ func GetCfg(appName, version, gitRevision string) (Cfg, error) {
 	cfg.UpstreamTransformID = *upstreamID
 	cfg.ReloadCommand = *reloadCmd
 	cfg.DryRun = *dryRun
+	cfg.DatabaseDir = *databaseDir
+	cfg.DatabaseConfigFileKey = *databaseConfigFileKey
 	cfg.LogLocationError = *logError
 	cfg.LogLocationWarning = *logWarn
 	cfg.LogLocationInfo = *logInfo
@@ -182,6 +206,9 @@ func validateCfg(cfg Cfg) error {
 	}
 	if cfg.UpstreamTransformID == "" {
 		errs = append(errs, errors.New("--upstream-transform-id cannot be empty"))
+	}
+	if cfg.DatabaseDir == "" {
+		errs = append(errs, errors.New("--database-dir cannot be empty"))
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("configuration errors: %v", errs)
