@@ -70,13 +70,15 @@ func TestValidateCfg_MissingRequired(t *testing.T) {
 // Test 10: A fully populated Cfg must pass validation without error.
 func TestValidateCfg_ValidConfig(t *testing.T) {
 	cfg := Cfg{
-		TOUrl:               "https://to.example.com",
-		TOUser:              "admin",
-		TOPassword:          "secret",
-		CDNName:             "myCDN",
-		OutputDir:           DefaultOutputDir,
-		ConfigFileKey:       DefaultConfigFileKey,
-		UpstreamTransformID: DefaultUpstreamTransformID,
+		TOUrl:                 "https://to.example.com",
+		TOUser:                "admin",
+		TOPassword:            "secret",
+		CDNName:               "myCDN",
+		OutputDir:             DefaultOutputDir,
+		ConfigFileKey:         DefaultConfigFileKey,
+		UpstreamTransformID:   DefaultUpstreamTransformID,
+		DatabaseDir:           DefaultDatabaseDir,
+		DatabaseConfigFileKey: DefaultDatabaseConfigFileKey,
 	}
 	if err := validateCfg(cfg); err != nil {
 		t.Errorf("expected no error for valid config, got: %s", err.Error())
@@ -93,5 +95,51 @@ func TestValidateCfg_DefaultValues(t *testing.T) {
 	}
 	if DefaultUpstreamTransformID != "extract_billing" {
 		t.Errorf("DefaultUpstreamTransformID changed unexpectedly: %s", DefaultUpstreamTransformID)
+	}
+	if DefaultDatabaseDir != "/etc/vector/database" {
+		t.Errorf("DefaultDatabaseDir changed unexpectedly: %s", DefaultDatabaseDir)
+	}
+	if DefaultDatabaseConfigFileKey != "vector_database" {
+		t.Errorf("DefaultDatabaseConfigFileKey changed unexpectedly: %s", DefaultDatabaseConfigFileKey)
+	}
+}
+
+// Test: validateCfg must accept a config with empty DatabaseDir (it has a default).
+// DatabaseDir is optional in the sense that it has a sensible default.
+func TestValidateCfg_DatabaseDirDefault(t *testing.T) {
+	cfg := Cfg{
+		TOUrl:                  "https://to.example.com",
+		TOUser:                 "admin",
+		TOPassword:             "secret",
+		CDNName:                "myCDN",
+		OutputDir:              DefaultOutputDir,
+		ConfigFileKey:          DefaultConfigFileKey,
+		UpstreamTransformID:    DefaultUpstreamTransformID,
+		DatabaseDir:            DefaultDatabaseDir,
+		DatabaseConfigFileKey:  DefaultDatabaseConfigFileKey,
+	}
+	if err := validateCfg(cfg); err != nil {
+		t.Errorf("expected no error for valid config with database fields, got: %s", err.Error())
+	}
+}
+
+// Test: validateCfg must return an error when DatabaseDir is explicitly set to empty.
+func TestValidateCfg_EmptyDatabaseDir(t *testing.T) {
+	cfg := Cfg{
+		TOUrl:               "https://to.example.com",
+		TOUser:              "admin",
+		TOPassword:          "secret",
+		CDNName:             "myCDN",
+		OutputDir:           DefaultOutputDir,
+		ConfigFileKey:       DefaultConfigFileKey,
+		UpstreamTransformID: DefaultUpstreamTransformID,
+		DatabaseDir:         "", // explicitly empty -- must fail
+	}
+	err := validateCfg(cfg)
+	if err == nil {
+		t.Error("expected error for empty DatabaseDir, got nil")
+	}
+	if !strings.Contains(err.Error(), "database-dir") {
+		t.Errorf("expected error containing 'database-dir', got: %s", err.Error())
 	}
 }

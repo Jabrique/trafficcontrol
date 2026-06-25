@@ -29,6 +29,13 @@ type TenantDSConfig struct {
 	// XMLID is the Delivery Service XML ID (e.g. "ds-video-streaming").
 	XMLID string
 
+	// Tier controls which log fields are exposed to the customer.
+	// Accepted values: "standard" (default) or "premium".
+	// Standard tier drops GeoIP and anonymous-IP fields before delivery.
+	// Premium tier delivers all enriched fields.
+	// Zero value ("") is treated as "standard".
+	Tier string
+
 	// Sinks is a list of Vector sink configurations to generate for this DS.
 	// A DS may have multiple sinks (e.g. both S3 and Splunk).
 	Sinks []SinkEntry
@@ -49,15 +56,18 @@ type SinkEntry struct {
 // VectorConfigFile is the top-level structure of a generated .yaml file.
 // It maps directly to Vector's config format with top-level transforms/sinks keys.
 type VectorConfigFile struct {
-	Transforms map[string]VectorTransform         `yaml:"transforms"`
-	Sinks      map[string]map[string]interface{}  `yaml:"sinks"`
+	Transforms map[string]VectorTransform        `yaml:"transforms"`
+	Sinks      map[string]map[string]interface{} `yaml:"sinks"`
 }
 
-// VectorTransform represents a Vector filter transform.
+// VectorTransform represents a Vector transform (filter or remap).
+// For filter transforms: Type="filter", Condition is set, Source is empty.
+// For remap transforms:  Type="remap",  Source is set,    Condition is empty.
 type VectorTransform struct {
 	Type      string   `yaml:"type"`
 	Inputs    []string `yaml:"inputs"`
-	Condition string   `yaml:"condition"`
+	Condition string   `yaml:"condition,omitempty"`
+	Source    string   `yaml:"source,omitempty"`
 }
 
 // RunResult is the operation summary returned by Run().
