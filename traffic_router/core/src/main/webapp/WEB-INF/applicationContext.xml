@@ -198,7 +198,9 @@
 	</bean>
 
 	<bean id="ScheduledExecutorService" class="java.util.concurrent.Executors"
-		factory-method="newSingleThreadScheduledExecutor" />
+		factory-method="newScheduledThreadPool">
+		<constructor-arg value="4" type="int" />
+	</bean>
 
 	<bean id="MonitorWatcher" class="org.apache.traffic_control.traffic_router.core.monitor.TrafficMonitorWatcher">
 		<property name="stateUrl" value="http://[host]/publish/CrStates" />
