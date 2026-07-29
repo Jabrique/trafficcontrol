@@ -43,7 +43,7 @@ import org.apache.traffic_control.traffic_router.core.router.TrafficRouterManage
 
 import static org.apache.commons.codec.digest.DigestUtils.md5Hex;
 
-@SuppressWarnings({"PMD.CyclomaticComplexity"})
+@SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.TooManyFields"})
 public abstract class AbstractServiceUpdater {
 	private static final Logger LOGGER = LogManager.getLogger(AbstractServiceUpdater.class);
 
@@ -57,6 +57,11 @@ public abstract class AbstractServiceUpdater {
 	private TrafficRouterManager trafficRouterManager;
 	protected Path databasesDirectory;
 	private String eTag = null;
+
+	private static final int DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
+	private static final int DEFAULT_READ_TIMEOUT_MS    = 120_000;
+	private int connectTimeout = DEFAULT_CONNECT_TIMEOUT_MS;
+	private int readTimeout    = DEFAULT_READ_TIMEOUT_MS;
 
 	public void destroy() {
 		executorService.shutdownNow();
@@ -238,6 +243,14 @@ public abstract class AbstractServiceUpdater {
 		this.executorService = executorService;
 	}
 
+	public void setConnectTimeout(final int connectTimeout) {
+		this.connectTimeout = connectTimeout;
+	}
+
+	public void setReadTimeout(final int readTimeout) {
+		this.readTimeout = readTimeout;
+	}
+
 	/**
 	 * Sets pollingInterval.
 	 *
@@ -357,6 +370,12 @@ public abstract class AbstractServiceUpdater {
 		LOGGER.info("[" + getClass().getSimpleName() + "] Downloading database: " + url);
 		final URL dbURL = new URL(url);
 		final URLConnection conn = dbURL.openConnection();
+
+		// Without these timeouts, a server that stops sending data mid-transfer blocks this
+		// thread permanently, starving all other watchers sharing the same ScheduledExecutorService.
+		// connectTimeout covers TCP + TLS handshake. readTimeout covers mid-transfer stalls.
+		conn.setConnectTimeout(connectTimeout);
+		conn.setReadTimeout(readTimeout);
 
 		final long existingLastModified = existingDb.lastModified();
 		if (conn instanceof HttpURLConnection && useModifiedTimestamp(existingDb)) {
