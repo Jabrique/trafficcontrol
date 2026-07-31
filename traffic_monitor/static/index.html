@@ -56,6 +56,7 @@ under the License.
 			<a href="/api/version">/api/version</a>
 			<a href="/api/traffic-ops-uri">/api/traffic-ops-uri</a>
 			<a href="/api/cache-statuses">/api/cache-statuses</a>
+			<a href="/api/router-statuses">/api/router-statuses</a>
 			<a href="/api/bandwidth-kbps">/api/bandwidth-kbps</a>
 			<a href="/api/bandwidth-capacity-kbps">/api/bandwidth-capacity-kbps</a>
 			<a href="/api/monitor-config">/api/monitor-config</a>
@@ -182,6 +183,28 @@ under the License.
 						</tr>
 					</thead>
 					<tbody id="event-log"></tbody>
+				</table>
+			</div>
+		</li>
+
+		<li class="tab" id="router-states-content-tab">
+			<input type="radio" name="tabs" class="tab" id="router-states-input"/>
+			<label for="router-states-input">Router States</label>
+			<div id="router-states-content" class="tabcontent">
+				<table>
+					<thead>
+						<tr>
+							<th class="text-entry">Router</th>
+							<th class="text-entry">FQDN</th>
+							<th class="text-entry">Type</th>
+							<th class="text-entry">Cache Group</th>
+							<th class="text-entry">Status</th>
+							<th class="text-entry">IPv4</th>
+							<th class="text-entry">IPv6</th>
+							<th class="text-entry">Combined</th>
+						</tr>
+					</thead>
+					<tbody id="router-states"></tbody>
 				</table>
 			</div>
 		</li>

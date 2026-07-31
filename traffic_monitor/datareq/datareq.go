@@ -132,6 +132,9 @@ func MakeDispatchMap(
 		"/api/cache-statuses": wrap(WrapErr(errorCount, func() ([]byte, error) {
 			return srvAPICacheStates(toData, statInfoHistory, statResultHistory, healthHistory, lastHealthDurations, localCacheStatus, statMaxKbpses, monitorConfig)
 		}, rfc.ApplicationJSON)),
+		"/api/router-statuses": wrap(WrapErr(errorCount, func() ([]byte, error) {
+			return srvAPIRouterStatuses(localStates, combinedStates, monitorConfig)
+		}, rfc.ApplicationJSON)),
 		"/api/bandwidth-kbps": wrap(WrapBytes(func() []byte {
 			return srvAPIBandwidthKbps(toData, lastStats)
 		}, rfc.ApplicationJSON)),

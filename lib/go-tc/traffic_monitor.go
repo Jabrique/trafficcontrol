@@ -87,6 +87,9 @@ type TrafficMonitorConfig struct {
 	// Topologies is the set of topologies defined in Traffic Ops, consisting
 	// of just the EDGE_LOC-type cachegroup nodes.
 	Topologies map[string]CRConfigTopology `json:"topologies,omitempty"`
+	// TrafficRouters is the set of all Traffic Routers which should be
+	// health-monitored by the Traffic Monitor.
+	TrafficRouters []TrafficRouter `json:"trafficRouters,omitempty"`
 }
 
 const healthThresholdAvailableBandwidthInKbps = "availableBandwidthInKbps"
@@ -198,6 +201,8 @@ type TrafficMonitorConfigMap struct {
 	Profile map[string]TMProfile
 	// Topology is a map of Topology names to CRConfigTopology structs.
 	Topology map[string]CRConfigTopology
+	// TrafficRouter is a map of Traffic Router hostnames to TrafficRouter objects.
+	TrafficRouter map[string]TrafficRouter
 }
 
 // ToLegacy converts a Stats to a LegacyStats.
@@ -451,6 +456,28 @@ type TrafficMonitor struct {
 	ServerStatus string `json:"status"`
 }
 
+// TrafficRouter represents a Traffic Router server in the monitoring configuration.
+type TrafficRouter struct {
+	// Port is the port on which the Traffic Router serves API/health requests.
+	Port int `json:"port"`
+	// IP6 is the Traffic Router's IPv6 address.
+	IP6 string `json:"ip6"`
+	// IP is the Traffic Router's IPv4 address.
+	IP string `json:"ip"`
+	// HostName is the Traffic Router's hostname.
+	HostName string `json:"hostName"`
+	// FQDN is the Fully Qualified Domain Name of the Traffic Router server.
+	FQDN string `json:"fqdn"`
+	// Profile is the Name of the Profile used by the Traffic Router.
+	Profile string `json:"profile"`
+	// Location is the Name of the Cache Group to which the Traffic Router belongs.
+	Location string `json:"cachegroup"`
+	// ServerStatus is the Name of the Status of the Traffic Router.
+	ServerStatus string `json:"status"`
+	// Type is the type of the Traffic Router (e.g., CCR).
+	Type string `json:"type"`
+}
+
 // TMCacheGroup contains all of the information about a Cache Group necessary
 // for Traffic Monitor to do its job of monitoring health and statistics.
 type TMCacheGroup struct {
@@ -646,6 +673,7 @@ func TrafficMonitorTransformToMap(tmConfig *TrafficMonitorConfig) (*TrafficMonit
 	tm.DeliveryService = make(map[string]TMDeliveryService, len(tmConfig.DeliveryServices))
 	tm.Profile = make(map[string]TMProfile, len(tmConfig.Profiles))
 	tm.Topology = tmConfig.Topologies
+	tm.TrafficRouter = make(map[string]TrafficRouter, len(tmConfig.TrafficRouters))
 
 	for _, trafficServer := range tmConfig.TrafficServers {
 		tm.TrafficServer[trafficServer.HostName] = trafficServer
@@ -671,6 +699,10 @@ func TrafficMonitorTransformToMap(tmConfig *TrafficMonitorConfig) (*TrafficMonit
 		bwThreshold := profile.Parameters.Thresholds["availableBandwidthInKbps"]
 		profile.Parameters.MinFreeKbps = int64(bwThreshold.Val)
 		tm.Profile[profile.Name] = profile
+	}
+
+	for _, trafficRouter := range tmConfig.TrafficRouters {
+		tm.TrafficRouter[trafficRouter.HostName] = trafficRouter
 	}
 
 	return &tm, tm.Valid()

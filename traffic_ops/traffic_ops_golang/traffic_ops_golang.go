@@ -20,6 +20,7 @@ package main
  */
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,7 @@ import (
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/config"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/plugin"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/routing"
+	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/router_health"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/server"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/trafficvault"
 	_ "github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/trafficvault/backends" // init traffic vault backends
@@ -148,6 +150,10 @@ func main() {
 
 	auth.InitUsersCache(time.Duration(cfg.UserCacheRefreshIntervalSec)*time.Second, db.DB, time.Duration(cfg.DBQueryTimeoutSeconds)*time.Second)
 	server.InitServerUpdateStatusCache(time.Duration(cfg.ServerUpdateStatusCacheRefreshIntervalSec)*time.Second, db.DB, time.Duration(cfg.DBQueryTimeoutSeconds)*time.Second)
+
+	routerWatcher := router_health.NewWatcher(db, cfg)
+	go routerWatcher.Start(context.Background())
+	log.Infoln("RouterHealthWatcher started")
 
 	trafficVault := setupTrafficVault(*riakConfigFileName, &cfg)
 

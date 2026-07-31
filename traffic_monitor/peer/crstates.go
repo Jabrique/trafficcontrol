@@ -116,6 +116,44 @@ func (t *CRStatesThreadsafe) DeleteDeliveryService(name tc.DeliveryServiceName) 
 	t.m.Unlock()
 }
 
+// GetRouter returns the availability data of the given router. This does not mutate, and is thus safe for multiple goroutines to call.
+func (t *CRStatesThreadsafe) GetRouter(name tc.RouterName) (available tc.IsAvailable, ok bool) {
+	t.m.RLock()
+	available, ok = t.crStates.Routers[name]
+	t.m.RUnlock()
+	return
+}
+
+// GetRouters returns the availability data of all routers. This does not mutate, and is thus safe for multiple goroutines to call.
+func (t *CRStatesThreadsafe) GetRouters() map[tc.RouterName]tc.IsAvailable {
+	t.m.RLock()
+	defer t.m.RUnlock()
+	return t.crStates.CopyRouters()
+}
+
+// SetRouter sets the internal availability data for a particular router. It does NOT set data if the router doesn't already exist, avoiding race conditions with in-flight pollers for removed routers.
+func (t *CRStatesThreadsafe) SetRouter(routerName tc.RouterName, available tc.IsAvailable) {
+	t.m.Lock()
+	if _, ok := t.crStates.Routers[routerName]; ok {
+		t.crStates.Routers[routerName] = available
+	}
+	t.m.Unlock()
+}
+
+// AddRouter adds the internal availability data for a particular router.
+func (t *CRStatesThreadsafe) AddRouter(routerName tc.RouterName, available tc.IsAvailable) {
+	t.m.Lock()
+	t.crStates.Routers[routerName] = available
+	t.m.Unlock()
+}
+
+// DeleteRouter deletes the given router from the internal data.
+func (t *CRStatesThreadsafe) DeleteRouter(name tc.RouterName) {
+	t.m.Lock()
+	delete(t.crStates.Routers, name)
+	t.m.Unlock()
+}
+
 // CRStatesPeersThreadsafe provides safe access for multiple goroutines to read a map of Traffic Monitor peers to their returned Crstates, with a single goroutine writer.
 // This could be made lock-free, if the performance was necessary
 type CRStatesPeersThreadsafe struct {
