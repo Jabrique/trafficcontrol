@@ -135,15 +135,30 @@ func TestEvalRouterHealthWithinThresholds(t *testing.T) {
 }
 
 func TestEvalRouterHealthOfflineStatus(t *testing.T) {
-	result := RouterResult{
+	// OFFLINE with a poll error (service down) -- must be unavailable.
+	resultWithError := RouterResult{
 		ID:     "tr-01",
 		Status: tc.CacheStatusOffline,
+		Error:  errors.New("connection refused"),
 	}
 	profile := tc.TMProfile{}
 
-	avail, _ := EvalRouterHealth(result, profile)
+	avail, _ := EvalRouterHealth(resultWithError, profile)
 	if avail {
-		t.Fatal("OFFLINE router should be unavailable")
+		t.Fatal("OFFLINE router with poll error should be unavailable")
+	}
+
+	// OFFLINE with a successful poll (service recovered) -- must be available
+	// so that Traffic Ops can detect recovery via TM quorum and restore the
+	// router to REPORTED status automatically.
+	resultNoError := RouterResult{
+		ID:     "tr-01",
+		Status: tc.CacheStatusOffline,
+	}
+
+	avail, _ = EvalRouterHealth(resultNoError, profile)
+	if !avail {
+		t.Fatal("OFFLINE router with successful poll should be available (physical recovery detected)")
 	}
 }
 
