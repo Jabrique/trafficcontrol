@@ -127,6 +127,7 @@ func StartMonitorConfigManager(
 	distributedPeerStates peer.CRStatesPeersThreadsafe,
 	statURLSubscriber chan<- poller.CachePollerConfig,
 	healthURLSubscriber chan<- poller.CachePollerConfig,
+	routerHealthURLSubscriber chan<- poller.CachePollerConfig,
 	peerURLSubscriber chan<- poller.PeerPollerConfig,
 	distributedPeerURLSubscriber chan<- poller.PeerPollerConfig,
 	toIntervalSubscriber chan<- time.Duration,
@@ -144,6 +145,7 @@ func StartMonitorConfigManager(
 		distributedPeerStates,
 		statURLSubscriber,
 		healthURLSubscriber,
+		routerHealthURLSubscriber,
 		peerURLSubscriber,
 		distributedPeerURLSubscriber,
 		toIntervalSubscriber,
@@ -201,6 +203,7 @@ func monitorConfigListen(
 	distributedPeerStates peer.CRStatesPeersThreadsafe,
 	statURLSubscriber chan<- poller.CachePollerConfig,
 	healthURLSubscriber chan<- poller.CachePollerConfig,
+	routerHealthURLSubscriber chan<- poller.CachePollerConfig,
 	peerURLSubscriber chan<- poller.PeerPollerConfig,
 	distributedPeerURLSubscriber chan<- poller.PeerPollerConfig,
 	toIntervalSubscriber chan<- time.Duration,
@@ -306,6 +309,67 @@ func monitorConfigListen(
 			statURLs[srv.HostName] = poller.PollConfig{URL: statURL4, URLv6: statURL6, Host: srv.FQDN, Timeout: connTimeout, Format: format, PollType: pollType}
 		}
 
+		// Process Traffic Router health polling configuration
+		routerHealthURLs := map[string]poller.PollConfig{}
+		for _, router := range monitorConfig.TrafficRouter {
+			routerName := tc.RouterName(router.HostName)
+			routerStatus := tc.CacheStatusFromString(router.ServerStatus)
+
+			if routerStatus == tc.CacheStatusOnline {
+				localStates.AddRouter(routerName, tc.IsAvailable{IsAvailable: true, Ipv4Available: router.IP != "", Ipv6Available: router.IP6 != "", DirectlyPolled: false})
+				continue
+			}
+			if routerStatus != tc.CacheStatusReported &&
+				routerStatus != tc.CacheStatusAdminDown &&
+				routerStatus != tc.CacheStatusOffline {
+				continue
+			}
+			if _, exists := localStates.GetRouter(routerName); !exists {
+				localStates.AddRouter(routerName, tc.IsAvailable{IsAvailable: false, DirectlyPolled: true})
+			}
+
+			routerProfile, ok := monitorConfig.Profile[router.Profile]
+			if !ok {
+				log.Errorf("router %v profile %v not found in monitoring config profiles", router.HostName, router.Profile)
+				continue
+			}
+
+			pollURLStr := routerProfile.Parameters.HealthPollingURL
+			if pollURLStr == "" {
+				// default health endpoint for Traffic Router
+				pollURLStr = fmt.Sprintf("http://${hostname}:%d/crs/health", router.Port)
+			}
+
+			pollURL4Str := strings.NewReplacer(
+				"${hostname}", router.FQDN,
+				"${interface_name}", "",
+				"${port}", strconv.Itoa(router.Port),
+			).Replace(pollURLStr)
+
+			pollURL6Str := ""
+			if router.IP6 != "" {
+				pollURL6Str = strings.NewReplacer(
+					"${hostname}", "["+router.IP6+"]",
+					"${interface_name}", "",
+					"${port}", strconv.Itoa(router.Port),
+				).Replace(pollURLStr)
+			}
+
+			connTimeout := trafficOpsHealthConnectionTimeoutToDuration(routerProfile.Parameters.HealthConnectionTimeout)
+			if connTimeout == 0 {
+				connTimeout = DefaultHealthConnectionTimeout
+			}
+
+			routerHealthURLs[router.HostName] = poller.PollConfig{URL: pollURL4Str, URLv6: pollURL6Str, Host: router.FQDN, Timeout: connTimeout, Format: "health", PollType: poller.DefaultPollerType}
+		}
+
+		// Prune routers removed from config
+		for routerName := range localStates.GetRouters() {
+			if _, exists := monitorConfig.TrafficRouter[string(routerName)]; !exists {
+				localStates.DeleteRouter(routerName)
+			}
+		}
+
 		peerSet := map[tc.TrafficMonitorName]struct{}{}
 		tmsByGroup := make(map[string][]tc.TrafficMonitor)
 		for _, srv := range monitorConfig.TrafficMonitor {
@@ -343,6 +407,9 @@ func monitorConfigListen(
 			statURLSubscriber <- poller.CachePollerConfig{Urls: statURLs, PollingProtocol: cfg.CachePollingProtocol, Interval: intervals.Stat, NoKeepAlive: intervals.StatNoKeepAlive}
 		}
 		healthURLSubscriber <- poller.CachePollerConfig{Urls: healthURLs, PollingProtocol: cfg.CachePollingProtocol, Interval: intervals.Health, NoKeepAlive: intervals.HealthNoKeepAlive}
+		if len(routerHealthURLs) > 0 {
+			routerHealthURLSubscriber <- poller.CachePollerConfig{Urls: routerHealthURLs, PollingProtocol: cfg.CachePollingProtocol, Interval: intervals.Health, NoKeepAlive: intervals.HealthNoKeepAlive}
+		}
 		peerURLSubscriber <- poller.PeerPollerConfig{Urls: peerURLs, Interval: intervals.Peer, NoKeepAlive: intervals.PeerNoKeepAlive}
 		if cfg.DistributedPolling {
 			distributedPeerURLSubscriber <- poller.PeerPollerConfig{Urls: distributedPeerURLs, Interval: intervals.Peer, NoKeepAlive: intervals.PeerNoKeepAlive}

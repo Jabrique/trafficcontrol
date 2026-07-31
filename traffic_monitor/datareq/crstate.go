@@ -75,6 +75,7 @@ func filterDirectlyPolledCaches(crstates tc.CRStates) tc.CRStates {
 	filtered := tc.CRStates{
 		Caches:          make(map[tc.CacheName]tc.IsAvailable),
 		DeliveryService: crstates.DeliveryService,
+		Routers:         crstates.Routers,
 	}
 	for cacheName, availability := range crstates.Caches {
 		if availability.DirectlyPolled {
