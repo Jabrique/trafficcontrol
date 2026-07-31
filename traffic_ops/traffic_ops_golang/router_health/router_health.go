@@ -134,6 +134,28 @@ func (w *Watcher) poll(ctx context.Context) {
 	}
 }
 
+// shouldSetOffline returns true when all three conditions are met:
+// the down count has reached the threshold, the router is not already being
+// managed by this watcher, and the router's current status is REPORTED.
+// Only REPORTED routers are automatically taken offline so that ONLINE,
+// ADMIN_DOWN, and operator-set OFFLINE routers are never touched.
+func shouldSetOffline(downCount, threshold int, alreadyManaged bool, currentStatus string) bool {
+	return downCount >= threshold &&
+		!alreadyManaged &&
+		currentStatus == string(tc.CacheStatusReported)
+}
+
+// shouldRestore returns true when all three conditions are met:
+// the up count has reached the threshold, the server's offline_reason still
+// carries the auto-tm tag (confirming this watcher set it OFFLINE), and the
+// current status is still OFFLINE. If an operator has cleared the tag or
+// changed the status, this returns false and tracking stops.
+func shouldRestore(upCount, threshold int, hasAutoTag bool, currentStatus string) bool {
+	return upCount >= threshold &&
+		hasAutoTag &&
+		currentStatus == string(tc.CacheStatusOffline)
+}
+
 // processRouterState handles both down detection and recovery for a single router
 // in a single TM poll cycle.
 func (w *Watcher) processRouterState(tx *sql.Tx, cdnName, hostname string, isAvailable bool) {
@@ -156,8 +178,8 @@ func (w *Watcher) processRouterState(tx *sql.Tx, cdnName, hostname string, isAva
 			log.Debugf("RouterHealthWatcher: getRouterStatus(%s): %v", hostname, err)
 			return
 		}
-		if currentStatus != string(tc.CacheStatusReported) {
-			return // only auto-manage routers that are currently REPORTED
+		if !shouldSetOffline(w.downCounts[hostname], w.downThreshold, w.autoOffline[hostname], currentStatus) {
+			return
 		}
 
 		reason := autoOfflineReason
@@ -191,16 +213,14 @@ func (w *Watcher) processRouterState(tx *sql.Tx, cdnName, hostname string, isAva
 			log.Debugf("RouterHealthWatcher: getRouterStatus(%s): %v", hostname, err)
 			return
 		}
-		// Operator may have changed status manually -- stop tracking.
-		if currentStatus != string(tc.CacheStatusOffline) {
-			w.autoOffline[hostname] = false
-			w.upCounts[hostname] = 0
-			return
-		}
-		// Verify offline_reason tag is still ours before restoring.
-		if !w.hasAutoTag(tx, serverID) {
-			w.autoOffline[hostname] = false
-			w.upCounts[hostname] = 0
+		hasTag := w.hasAutoTag(tx, serverID)
+		if !shouldRestore(w.upCounts[hostname], w.upThreshold, hasTag, currentStatus) {
+			// Either operator changed status/reason, or threshold not met yet.
+			// Stop tracking if it is clear the operator has taken over.
+			if currentStatus != string(tc.CacheStatusOffline) || !hasTag {
+				w.autoOffline[hostname] = false
+				w.upCounts[hostname] = 0
+			}
 			return
 		}
 
