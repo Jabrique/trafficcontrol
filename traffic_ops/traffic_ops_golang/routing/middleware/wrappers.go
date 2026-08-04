@@ -115,16 +115,17 @@ func (a AuthBase) GetWrapper(privLevelRequired int) Middleware {
 				return
 			}
 			if v.Major < 4 {
-				if user.PrivLevel < privLevelRequired {
-					api.HandleErr(w, r, nil, http.StatusForbidden, errors.New("Forbidden."), nil)
-					return
+					// Pre-v4 API: use EffectivePrivLevel (= PrivLevel for non-scoped, capped for scoped)
+					if user.EffectivePrivLevel < privLevelRequired {
+						api.HandleErr(w, r, nil, http.StatusForbidden, errors.New("Forbidden."), nil)
+						return
+					}
+				} else {
+					if !cfg.RoleBasedPermissions && user.EffectivePrivLevel < privLevelRequired {
+						api.HandleErr(w, r, nil, http.StatusForbidden, errors.New("Forbidden."), nil)
+						return
+					}
 				}
-			} else {
-				if !cfg.RoleBasedPermissions && user.PrivLevel < privLevelRequired {
-					api.HandleErr(w, r, nil, http.StatusForbidden, errors.New("Forbidden."), nil)
-					return
-				}
-			}
 			api.AddUserToReq(r, user)
 			handlerFunc(w, r)
 		}

@@ -27,6 +27,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -38,8 +39,10 @@ import (
 
 	"github.com/apache/trafficcontrol/v8/lib/go-log"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/about"
+	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/api"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/auth"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/config"
+	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/iprule"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/plugin"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/routing"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/router_health"
@@ -151,6 +154,27 @@ func main() {
 	auth.InitUsersCache(time.Duration(cfg.UserCacheRefreshIntervalSec)*time.Second, db.DB, time.Duration(cfg.DBQueryTimeoutSeconds)*time.Second)
 	server.InitServerUpdateStatusCache(time.Duration(cfg.ServerUpdateStatusCacheRefreshIntervalSec)*time.Second, db.DB, time.Duration(cfg.DBQueryTimeoutSeconds)*time.Second)
 
+	// Apply safe defaults for API token + IP rule config fields.
+	// Must be called after LoadConfig so json-unset fields (zero values) get defaults.
+	cfg.SetAPITokenDefaults()
+
+	// Parse TrustedProxyCIDRs once at startup into *net.IPNet values.
+	// Stored in cfg.ParsedTrustedProxyCIDRs for use in IPRuleMiddleware + authenticateAPIToken.
+	for _, cidrStr := range cfg.TrustedProxyCIDRs {
+		_, ipNet, cidrErr := net.ParseCIDR(cidrStr)
+		if cidrErr != nil {
+			log.Errorf("invalid trusted_proxy_cidrs entry %q: %v — SKIPPED", cidrStr, cidrErr)
+			continue
+		}
+		cfg.ParsedTrustedProxyCIDRs = append(cfg.ParsedTrustedProxyCIDRs, ipNet)
+	}
+
+	// Initialise API token authentication: semaphore for last_used_at goroutines + rate limiters.
+	api.InitAPITokenAuth(cfg.APITokenMaxAsyncUpdates, cfg.APITokenIPRateLimit, cfg.APITokenRateLimit)
+
+	// Create IP rule cache — loads rules from DB immediately at construction (no lazy-load window).
+	ipRuleCache := iprule.NewRuleCache(db.DB, time.Duration(cfg.APIIPRuleCacheTTLSeconds)*time.Second)
+
 	routerWatcher := router_health.NewWatcher(db, cfg)
 	go routerWatcher.Start(context.Background())
 	log.Infoln("RouterHealthWatcher started")
@@ -184,7 +208,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	d := routing.ServerData{DB: db, Config: cfg, Profiling: &profiling, Plugins: plugins, TrafficVault: trafficVault, Mux: mux}
+	d := routing.ServerData{DB: db, Config: cfg, Profiling: &profiling, Plugins: plugins, TrafficVault: trafficVault, Mux: mux, IPRuleCache: ipRuleCache}
 	if err := routing.RegisterRoutes(d); err != nil {
 		log.Errorf("registering routes: %v\n", err)
 		os.Exit(1)

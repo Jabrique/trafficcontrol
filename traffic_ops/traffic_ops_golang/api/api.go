@@ -800,6 +800,19 @@ func GetUserFromReq(w http.ResponseWriter, r *http.Request, secret string) (auth
 		if len(tokenSplit) > 1 {
 			givenToken = tokenSplit[1]
 		}
+		// API token branch: tokens starting with "to_at_" are NOT JWTs.
+		// Route to authenticateAPIToken() — skip all JWT parsing.
+		if strings.HasPrefix(givenToken, tc.APITokenPrefix) {
+			user, userErr, sysErr, code := authenticateAPIToken(w, r, givenToken)
+			if userErr != nil || sysErr != nil {
+				return user, userErr, sysErr, code
+			}
+			// Set IsAPITokenAuthKey in context so IPRuleMiddleware detects this as
+			// an API token request. Value is struct{}{} — consumer checks != nil.
+			ctx := context.WithValue(r.Context(), IsAPITokenAuthKey, struct{}{})
+			*r = *r.WithContext(ctx)
+			return user, nil, nil, code
+		}
 		bearerCookie, readToken, err := getCookieFromAccessToken(givenToken, secret)
 		if err != nil {
 			return auth.CurrentUser{}, errors.New("unauthorized, please log in."), err, http.StatusUnauthorized
@@ -862,6 +875,10 @@ func GetUserFromReq(w http.ResponseWriter, r *http.Request, secret string) (auth
 	if userErr != nil || sysErr != nil {
 		return auth.CurrentUser{}, userErr, sysErr, code
 	}
+	// Session-authenticated users always have full privilege — EffectivePrivLevel = PrivLevel.
+	// For API-token-authenticated users, authenticateAPIToken sets this explicitly
+	// (capped to PrivLevelReadOnly if the token has scoped_permissions).
+	user.EffectivePrivLevel = user.PrivLevel
 
 	duration := tocookie.DefaultDuration
 	newCookie := tocookie.GetCookie(oldCookie.AuthData, duration, secret)

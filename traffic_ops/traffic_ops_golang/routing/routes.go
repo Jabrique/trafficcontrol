@@ -35,7 +35,9 @@ import (
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/acme"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/api"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/apicapability"
+	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/apiiprule"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/apitenant"
+	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/apitoken"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/asn"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/auth"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/cachegroup"
@@ -160,6 +162,23 @@ func Routes(d ServerData) ([]Route, http.Handler, error) {
 		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodPost, Path: `deliveryservices/xmlId/{xmlid}/sslkeys/renew$`, Handler: deliveryservice.RenewAcmeCertificate, RequiredPrivLevel: auth.PrivLevelOperations, RequiredPermissions: []string{"ACME:READ", "DS-SECURITY-KEY:DELETE", "DS-SECURITY-KEY:CREATE", "DS-SECURITY-KEY:UPDATE", "DS-SECURITY-KEY:READ", "DELIVERY-SERVICE:READ", "DELIVERY-SERVICE:UPDATE"}, Authenticated: Authenticated, Middlewares: nil, ID: 25343905731},
 		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodPost, Path: `acme_autorenew/?$`, Handler: deliveryservice.RenewCertificates, RequiredPrivLevel: auth.PrivLevelOperations, RequiredPermissions: []string{"ACME:READ", "DS-SECURITY-KEY:UPDATE", "DELIVERY-SERVICE:UPDATE"}, Authenticated: Authenticated, Middlewares: nil, ID: 25343905741},
 		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodGet, Path: `async_status/{id}$`, Handler: api.GetAsyncStatus, RequiredPrivLevel: auth.PrivLevelOperations, RequiredPermissions: []string{"ASYNC-STATUS:READ"}, Authenticated: Authenticated, Middlewares: nil, ID: 25343905751},
+
+		// API Token management — available at /api/5.0/user/api_tokens
+		// Users can manage their own tokens; admins can manage all tokens.
+		// These endpoints are also guarded by the seed IP rule "token-management-localhost-only"
+		// which restricts access to 127.0.0.1/32 by default (configurable via api_ip_rule table).
+		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodGet, Path: `user/api_tokens/?$`, Handler: apitoken.GetAll, RequiredPrivLevel: auth.PrivLevelReadOnly, RequiredPermissions: []string{"API-TOKEN:READ"}, Authenticated: Authenticated, Middlewares: nil, ID: 5026080310001},
+		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodGet, Path: `user/api_tokens/{id}$`, Handler: apitoken.Get, RequiredPrivLevel: auth.PrivLevelReadOnly, RequiredPermissions: []string{"API-TOKEN:READ"}, Authenticated: Authenticated, Middlewares: nil, ID: 5026080310002},
+		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodPost, Path: `user/api_tokens/?$`, Handler: apitoken.Create, RequiredPrivLevel: auth.PrivLevelReadOnly, RequiredPermissions: []string{"API-TOKEN:CREATE"}, Authenticated: Authenticated, Middlewares: nil, ID: 5026080310003},
+		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodDelete, Path: `user/api_tokens/{id}$`, Handler: apitoken.Delete, RequiredPrivLevel: auth.PrivLevelReadOnly, RequiredPermissions: []string{"API-TOKEN:DELETE"}, Authenticated: Authenticated, Middlewares: nil, ID: 5026080310004},
+
+		// API IP Rule management — available at /api/5.0/api_ip_rules
+		// Requires admin privileges — rules are a security-critical configuration.
+		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodGet, Path: `api_ip_rules/?$`, Handler: apiiprule.GetAll, RequiredPrivLevel: auth.PrivLevelAdmin, RequiredPermissions: []string{"API-IP-RULE:READ"}, Authenticated: Authenticated, Middlewares: nil, ID: 5026080320001},
+		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodGet, Path: `api_ip_rules/{id}$`, Handler: apiiprule.Get, RequiredPrivLevel: auth.PrivLevelAdmin, RequiredPermissions: []string{"API-IP-RULE:READ"}, Authenticated: Authenticated, Middlewares: nil, ID: 5026080320002},
+		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodPost, Path: `api_ip_rules/?$`, Handler: apiiprule.Create, RequiredPrivLevel: auth.PrivLevelAdmin, RequiredPermissions: []string{"API-IP-RULE:CREATE"}, Authenticated: Authenticated, Middlewares: nil, ID: 5026080320003},
+		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodPut, Path: `api_ip_rules/{id}$`, Handler: apiiprule.Update, RequiredPrivLevel: auth.PrivLevelAdmin, RequiredPermissions: []string{"API-IP-RULE:UPDATE"}, Authenticated: Authenticated, Middlewares: nil, ID: 5026080320004},
+		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodDelete, Path: `api_ip_rules/{id}$`, Handler: apiiprule.Delete, RequiredPrivLevel: auth.PrivLevelAdmin, RequiredPermissions: []string{"API-IP-RULE:DELETE"}, Authenticated: Authenticated, Middlewares: nil, ID: 5026080320005},
 
 		//ASNs
 		{Version: api.Version{Major: 5, Minor: 0}, Method: http.MethodGet, Path: `asns/?$`, Handler: asn.Read, RequiredPrivLevel: auth.PrivLevelReadOnly, RequiredPermissions: []string{"ASN:READ", "CACHE-GROUP:READ"}, Authenticated: Authenticated, Middlewares: nil, ID: 47387772231},
