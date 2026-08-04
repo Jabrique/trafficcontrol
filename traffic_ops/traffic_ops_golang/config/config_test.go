@@ -312,3 +312,83 @@ func TestValidateRoutingBlacklist(t *testing.T) {
 		}
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SetAPITokenDefaults tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestSetAPITokenDefaults_ZeroValues_GetDefaults(t *testing.T) {
+	cfg := ConfigTrafficOpsGolang{} // all zero values
+	cfg.SetAPITokenDefaults()
+
+	if cfg.APITokenMaxExpiryDays != 365 {
+		t.Errorf("APITokenMaxExpiryDays: expected 365, got %d", cfg.APITokenMaxExpiryDays)
+	}
+	if cfg.APITokenDefaultExpiryDays != 90 {
+		t.Errorf("APITokenDefaultExpiryDays: expected 90, got %d", cfg.APITokenDefaultExpiryDays)
+	}
+	if cfg.APITokenMaxPerUser != 10 {
+		t.Errorf("APITokenMaxPerUser: expected 10, got %d", cfg.APITokenMaxPerUser)
+	}
+	if cfg.APITokenMaxAsyncUpdates != 50 {
+		t.Errorf("APITokenMaxAsyncUpdates: expected 50, got %d", cfg.APITokenMaxAsyncUpdates)
+	}
+	if cfg.APITokenRateLimit != 100 {
+		t.Errorf("APITokenRateLimit: expected 100, got %d", cfg.APITokenRateLimit)
+	}
+	if cfg.APITokenIPRateLimit != 1000 {
+		t.Errorf("APITokenIPRateLimit: expected 1000, got %d", cfg.APITokenIPRateLimit)
+	}
+	if cfg.APIIPRuleCacheTTLSeconds != 30 {
+		t.Errorf("APIIPRuleCacheTTLSeconds: expected 30, got %d", cfg.APIIPRuleCacheTTLSeconds)
+	}
+}
+
+func TestSetAPITokenDefaults_PositiveValues_Preserved(t *testing.T) {
+	cfg := ConfigTrafficOpsGolang{
+		APITokenMaxExpiryDays:     180,
+		APITokenDefaultExpiryDays: 30,
+		APITokenMaxPerUser:        5,
+		APITokenMaxAsyncUpdates:   20,
+		APITokenRateLimit:         60,
+		APITokenIPRateLimit:       500,
+		APIIPRuleCacheTTLSeconds:  60,
+	}
+	cfg.SetAPITokenDefaults()
+
+	if cfg.APITokenMaxExpiryDays != 180 {
+		t.Errorf("positive APITokenMaxExpiryDays should be preserved, got %d", cfg.APITokenMaxExpiryDays)
+	}
+	if cfg.APITokenMaxPerUser != 5 {
+		t.Errorf("positive APITokenMaxPerUser should be preserved, got %d", cfg.APITokenMaxPerUser)
+	}
+	if cfg.APIIPRuleCacheTTLSeconds != 60 {
+		t.Errorf("positive APIIPRuleCacheTTLSeconds should be preserved, got %d", cfg.APIIPRuleCacheTTLSeconds)
+	}
+}
+
+func TestSetAPITokenDefaults_NegativeValues_GetDefaults(t *testing.T) {
+	cfg := ConfigTrafficOpsGolang{
+		APITokenMaxPerUser: -1,
+		APITokenRateLimit:  -100,
+	}
+	cfg.SetAPITokenDefaults()
+
+	if cfg.APITokenMaxPerUser != 10 {
+		t.Errorf("negative APITokenMaxPerUser should get default 10, got %d", cfg.APITokenMaxPerUser)
+	}
+	if cfg.APITokenRateLimit != 100 {
+		t.Errorf("negative APITokenRateLimit should get default 100, got %d", cfg.APITokenRateLimit)
+	}
+}
+
+func TestSetAPITokenDefaults_Idempotent(t *testing.T) {
+	cfg := ConfigTrafficOpsGolang{}
+	cfg.SetAPITokenDefaults()
+	first := cfg.APITokenMaxExpiryDays
+
+	cfg.SetAPITokenDefaults() // Call again — should not change already-defaulted values.
+	if cfg.APITokenMaxExpiryDays != first {
+		t.Errorf("SetAPITokenDefaults not idempotent: first=%d, second=%d", first, cfg.APITokenMaxExpiryDays)
+	}
+}

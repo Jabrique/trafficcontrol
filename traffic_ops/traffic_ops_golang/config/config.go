@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -148,6 +149,27 @@ type ConfigTrafficOpsGolang struct {
 	// CRConfigEmulateOldPath is whether to emulate the legacy CRConfig request path when generating a new CRConfig. This primarily exists in the event a tool relies on the legacy path '/tools/write_crconfig'.
 	// Deprecated: will be removed in the next major version.
 	CRConfigEmulateOldPath bool `json:"crconfig_emulate_old_path"`
+
+	// API Token configuration.
+	// Zero values are invalid — SetAPITokenDefaults() fills them with safe defaults.
+	APITokenMaxExpiryDays     int `json:"api_token_max_expiry_days"`
+	APITokenDefaultExpiryDays int `json:"api_token_default_expiry_days"`
+	APITokenMaxPerUser        int `json:"api_token_max_per_user"`
+	APITokenMaxAsyncUpdates   int `json:"api_token_max_async_updates"`
+	APITokenRateLimit         int `json:"api_token_rate_limit_per_minute"`
+	APITokenIPRateLimit       int `json:"api_token_ip_rate_limit_per_minute"`
+
+	// IP Rule cache configuration.
+	APIIPRuleCacheTTLSeconds int `json:"api_ip_rule_cache_ttl_seconds"`
+
+	// TrustedProxyCIDRs lists the IP ranges of trusted reverse proxies.
+	// When a request's RemoteAddr is in this list, the X-Forwarded-For header
+	// is trusted to identify the real client IP.
+	TrustedProxyCIDRs []string `json:"trusted_proxy_cidrs"`
+
+	// ParsedTrustedProxyCIDRs is populated at startup from TrustedProxyCIDRs.
+	// Not serialized (json:"-"). Used by IPRuleMiddleware and authenticateAPIToken.
+	ParsedTrustedProxyCIDRs []*net.IPNet `json:"-"`
 }
 
 // RoutingBlacklist contains a list of route IDs that are disabled,
@@ -626,4 +648,39 @@ func getLDAPConf(s string) (*ConfigLDAP, error) {
 	ldapConf := ConfigLDAP{LDAPTimeoutSecs: DefaultLDAPTimeoutSecs} //if the field is not set in the config we use the default instead of 0
 	err := json.Unmarshal([]byte(s), &ldapConf)
 	return &ldapConf, err
+}
+
+// SetAPITokenDefaults fills any API Token or IP Rule configuration fields that
+// are unset (zero value) with safe defaults. Call this after loading the config.
+//
+// Defaults:
+//   - APITokenMaxExpiryDays:     365  (one year max)
+//   - APITokenDefaultExpiryDays: 90   (UI pre-fill — caller must provide expires_at)
+//   - APITokenMaxPerUser:        10
+//   - APITokenMaxAsyncUpdates:   50   (goroutine semaphore for last_used_at)
+//   - APITokenRateLimit:         100  requests/min per token
+//   - APITokenIPRateLimit:       1000 auth attempts/min per IP
+//   - APIIPRuleCacheTTLSeconds:  30   seconds between DB refreshes
+func (c *ConfigTrafficOpsGolang) SetAPITokenDefaults() {
+	if c.APITokenMaxExpiryDays <= 0 {
+		c.APITokenMaxExpiryDays = 365
+	}
+	if c.APITokenDefaultExpiryDays <= 0 {
+		c.APITokenDefaultExpiryDays = 90
+	}
+	if c.APITokenMaxPerUser <= 0 {
+		c.APITokenMaxPerUser = 10
+	}
+	if c.APITokenMaxAsyncUpdates <= 0 {
+		c.APITokenMaxAsyncUpdates = 50
+	}
+	if c.APITokenRateLimit <= 0 {
+		c.APITokenRateLimit = 100
+	}
+	if c.APITokenIPRateLimit <= 0 {
+		c.APITokenIPRateLimit = 1000
+	}
+	if c.APIIPRuleCacheTTLSeconds <= 0 {
+		c.APIIPRuleCacheTTLSeconds = 30
+	}
 }

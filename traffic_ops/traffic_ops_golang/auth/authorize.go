@@ -46,12 +46,27 @@ type CurrentUser struct {
 	Capabilities pq.StringArray `json:"capabilities" db:"capabilities"`
 	UCDN         string         `json:"ucdn" db:"ucdn"`
 	perms        map[string]struct{}
+
+	// IsAPITokenScoped is true when the request is authenticated via a scoped API token.
+	// When true:
+	//   1. Admin bypass in Can() and MissingPermissions() is disabled.
+	//   2. EffectivePrivLevel is capped at PrivLevelReadOnly (10).
+	// Always false for cookie/session auth and unscoped API tokens.
+	IsAPITokenScoped bool `json:"-" db:"-"`
+
+	// EffectivePrivLevel is the privilege level used for endpoint authorization.
+	// For scoped API tokens: always PrivLevelReadOnly (10), regardless of actual role.
+	// For all other auth: equals PrivLevel.
+	// This prevents a scoped admin token from bypassing PrivLevel-gated endpoints.
+	EffectivePrivLevel int `json:"-" db:"-"`
 }
 
 // Can returns whether or not the user has the specified Permission, i.e.
 // whether or not they "can" do something.
+// Admin bypass is disabled for scoped API tokens (IsAPITokenScoped=true) —
+// the scope must be explicitly checked.
 func (cu CurrentUser) Can(permission string) bool {
-	if cu.RoleName == tc.AdminRoleName {
+	if cu.RoleName == tc.AdminRoleName && !cu.IsAPITokenScoped {
 		return true
 	}
 	_, ok := cu.perms[permission]
@@ -59,10 +74,10 @@ func (cu CurrentUser) Can(permission string) bool {
 }
 
 // MissingPermissions returns all of the passed Permissions that the user does
-// not have.
+// not have. Admin bypass is disabled for scoped API tokens (IsAPITokenScoped=true).
 func (cu CurrentUser) MissingPermissions(permissions ...string) []string {
 	var ret []string
-	if cu.RoleName == tc.AdminRoleName {
+	if cu.RoleName == tc.AdminRoleName && !cu.IsAPITokenScoped {
 		return ret
 	}
 	for _, perm := range permissions {
@@ -78,7 +93,16 @@ type PasswordForm struct {
 	Password string `json:"p"`
 }
 
-const disallowed = "disallowed"
+const (
+	// DisallowedRoleName is the role name for disabled/blocked users.
+	// Exported so api package can reference it in authenticateAPIToken.
+	// Replaces the unexported `disallowed` constant below.
+	DisallowedRoleName = "disallowed"
+
+	// disallowed is kept for internal backward compatibility within this file.
+	// All new code outside this package must use DisallowedRoleName.
+	disallowed = DisallowedRoleName
+)
 
 // PrivLevelInvalid - The Default Priv level
 const PrivLevelInvalid = -1
@@ -106,7 +130,7 @@ const CurrentUserKey key = iota
 
 // GetCurrentUserFromDB  - returns the id and privilege level of the given user along with the username, or -1 as the id, - as the userName and PrivLevelInvalid if the user doesn't exist, along with a user facing error, a system error to log, and an error code to return
 func GetCurrentUserFromDB(DB *sqlx.DB, user string, timeout time.Duration) (CurrentUser, error, error, int) {
-	invalidUser := CurrentUser{"-", -1, PrivLevelInvalid, TenantIDInvalid, -1, "", []string{}, "", nil}
+	invalidUser := CurrentUser{UserName: "-", ID: -1, PrivLevel: PrivLevelInvalid, TenantID: TenantIDInvalid, Role: -1}
 	if usersCacheIsEnabled() {
 		u, exists := getUserFromCache(user)
 		if !exists {
@@ -134,7 +158,7 @@ WHERE
 
 	var currentUserInfo CurrentUser
 	if DB == nil {
-		return CurrentUser{"-", -1, PrivLevelInvalid, TenantIDInvalid, -1, "", []string{}, "", nil}, nil, errors.New("no db provided to GetCurrentUserFromDB"), http.StatusInternalServerError
+		return CurrentUser{UserName: "-", ID: -1, PrivLevel: PrivLevelInvalid, TenantID: TenantIDInvalid, Role: -1}, nil, errors.New("no db provided to GetCurrentUserFromDB"), http.StatusInternalServerError
 	}
 	dbCtx, dbClose := context.WithTimeout(context.Background(), timeout)
 	defer dbClose()
@@ -167,7 +191,7 @@ func GetCurrentUser(ctx context.Context) (*CurrentUser, error) {
 			return nil, fmt.Errorf("CurrentUser found with bad type: %T", v)
 		}
 	}
-	return &CurrentUser{"-", -1, PrivLevelInvalid, TenantIDInvalid, -1, "", []string{}, "", nil}, errors.New("No user found in Context")
+	return &CurrentUser{UserName: "-", ID: -1, PrivLevel: PrivLevelInvalid, TenantID: TenantIDInvalid, Role: -1}, errors.New("No user found in Context")
 }
 
 func CheckLocalUserIsAllowed(username string, db *sqlx.DB, ctx context.Context) (bool, error, error) {
@@ -291,4 +315,93 @@ func CheckLDAPUser(form PasswordForm, cfg *config.ConfigLDAP) (bool, error) {
 		return AuthenticateUserDN(userDN, form.Password, cfg)
 	}
 	return false, errors.New("User not found in LDAP")
+}
+
+// ApplyTokenPermissionScope restricts a CurrentUser's capabilities to only those
+// present in both the token's scoped_permissions AND the user's current role capabilities.
+//
+// This function MUST live in the auth package because `perms` is an unexported field.
+// It is called during API token authentication when the token has scoped_permissions set.
+//
+// Effect:
+//   - Capabilities = intersection of scopedPerms ∩ user.Capabilities
+//   - perms map updated to match
+//   - IsAPITokenScoped = true (disables admin bypass in Can() / MissingPermissions())
+//   - EffectivePrivLevel = PrivLevelReadOnly (10) — prevents scoped admin token from
+//     bypassing PrivLevel-gated endpoints regardless of actual role
+func ApplyTokenPermissionScope(user CurrentUser, scopedPerms []string) CurrentUser {
+	scopeSet := make(map[string]struct{}, len(scopedPerms))
+	for _, p := range scopedPerms {
+		scopeSet[p] = struct{}{}
+	}
+
+	var effective []string
+	effectiveMap := make(map[string]struct{})
+	for _, cap := range user.Capabilities {
+		if _, ok := scopeSet[cap]; ok {
+			effective = append(effective, cap)
+			effectiveMap[cap] = struct{}{}
+		}
+	}
+
+	user.Capabilities = effective
+	user.perms = effectiveMap
+	user.IsAPITokenScoped = true
+	// Cap privilege level at ReadOnly — scoped tokens cannot escalate beyond their scope
+	// even if the underlying user has PrivLevelOperations or PrivLevelAdmin.
+	user.EffectivePrivLevel = PrivLevelReadOnly
+	return user
+}
+
+// GetCurrentUserFromDBDirect always queries the database directly, bypassing the in-memory
+// user cache. This is used for API token authentication so that role changes (e.g. role
+// downgrade after token issuance) take effect immediately on the next request.
+//
+// Cookie session auth uses GetCurrentUserFromDB (may use cache) for performance.
+// API token auth uses this function for correctness.
+func GetCurrentUserFromDBDirect(DB *sqlx.DB, user string, timeout time.Duration) (CurrentUser, error, error, int) {
+	// Named-field init: safe against future struct field additions.
+	invalidUser := CurrentUser{UserName: "-", ID: -1, PrivLevel: PrivLevelInvalid, TenantID: TenantIDInvalid, Role: -1}
+
+	// Query is copied verbatim from GetCurrentUserFromDB.
+	// Join directly against tm_user → role → role_capability: no materialized view,
+	// no caching layer. Capabilities are always fresh from the database.
+	qry := `
+SELECT
+  r.priv_level,
+  r.id as role,
+  r.name as role_name,
+  u.id,
+  u.username,
+  u.tenant_id,
+  ARRAY(SELECT rc.cap_name FROM role_capability AS rc WHERE rc.role_id=r.id) AS capabilities,
+  u.ucdn
+FROM
+  tm_user AS u
+JOIN
+  role AS r ON u.role = r.id
+WHERE
+  u.username = $1
+`
+	dbCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var currentUser CurrentUser
+	err := DB.GetContext(dbCtx, &currentUser, qry, user)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return invalidUser, errors.New("no such user"), nil, http.StatusUnauthorized
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return invalidUser, nil, fmt.Errorf("db access timed out: %w", err), http.StatusServiceUnavailable
+		}
+		return invalidUser, nil, fmt.Errorf("querying user %s: %w", user, err), http.StatusInternalServerError
+	}
+
+	// Populate the unexported perms map — identical to GetCurrentUserFromDB.
+	currentUser.perms = make(map[string]struct{}, len(currentUser.Capabilities))
+	for _, perm := range currentUser.Capabilities {
+		currentUser.perms[perm] = struct{}{}
+	}
+	return currentUser, nil, nil, http.StatusOK
 }
