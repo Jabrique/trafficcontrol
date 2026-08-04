@@ -903,8 +903,21 @@ func createMockCache(interfaceName string) Cache {
 
 func createMockRouter() Router {
 	return Router{
-		Type:    RouterType,
-		Profile: "routerProfile",
+		BasicServer: BasicServer{
+			CommonServerProperties: CommonServerProperties{
+				Profile:    "routerProfile",
+				Status:     "noStatus",
+				Port:       0,
+				Cachegroup: "noGroup",
+				HostName:   "noHostname",
+				FQDN:       "noFqdn",
+			},
+			// serverID=3 is shared with cache3 in the test mock; the DB join
+			// assigns cache3's service-address IPs to this router row.
+			IP:  "5.6.7.8",
+			IP6: "2020::4",
+		},
+		Type: RouterType,
 	}
 }
 
