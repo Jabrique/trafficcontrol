@@ -26,6 +26,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -41,6 +42,7 @@ import (
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/api"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/auth"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/config"
+	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/iprule"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/plugin"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/routing/middleware"
 	"github.com/apache/trafficcontrol/v8/traffic_ops/traffic_ops_golang/trafficvault"
@@ -93,19 +95,27 @@ func (r Route) String() string {
 }
 
 // SetMiddleware sets up a Route's Middlewares to include the default set of
-// Middlewares if necessary.
-func (r *Route) SetMiddleware(authBase middleware.AuthBase, requestTimeout time.Duration) {
+// Middlewares if necessary. ipRuleCache may be nil — in that case IP rule
+// enforcement is skipped (for tests or when the feature is disabled).
+func (r *Route) SetMiddleware(authBase middleware.AuthBase, requestTimeout time.Duration, ipRuleCache *iprule.RuleCache, trustedProxyCIDRs []*net.IPNet) {
 	if r.Middlewares == nil {
 		r.Middlewares = middleware.GetDefault(authBase.Secret, requestTimeout)
 	}
 	if r.Authenticated { // a privLevel of zero is an unauthenticated endpoint.
 		authWrapper := authBase.GetWrapper(r.RequiredPrivLevel)
 		r.Middlewares = append(r.Middlewares, authWrapper)
+		// IPRuleMiddleware MUST be after auth (needs user in context) and
+		// BEFORE RequiredPermissionsMiddleware (fails fast before perm check).
+		r.Middlewares = append(r.Middlewares, iprule.NewIPRuleMiddlewareWithKey(
+			ipRuleCache,
+			trustedProxyCIDRs,
+			api.IsAPITokenAuthKey,
+		))
 	}
 	r.Middlewares = append(r.Middlewares, middleware.RequiredPermissionsMiddleware(r.RequiredPermissions))
 }
 
-// ServerData ...
+// ServerData holds data passed to route registration and middleware setup.
 type ServerData struct {
 	config.Config
 	DB           *sqlx.DB
@@ -113,6 +123,9 @@ type ServerData struct {
 	Plugins      plugin.Plugins
 	TrafficVault trafficvault.TrafficVault
 	Mux          *http.ServeMux
+	// IPRuleCache is initialised in main() from the DB before RegisterRoutes is called.
+	// It provides the in-memory cache of api_ip_rule entries for the IPRuleMiddleware.
+	IPRuleCache *iprule.RuleCache
 }
 
 // CompiledRoute ...
@@ -181,7 +194,7 @@ type PathHandler struct {
 
 // CreateRouteMap returns a map of methods to a slice of paths and handlers; wrapping the handlers in the appropriate middleware. Uses Semantic Versioning: routes are added to every subsequent minor version, but not subsequent major versions. For example, a 1.2 route is added to 1.3 but not 2.1. Also truncates '2.0' to '2', creating succinct major versions.
 // Returns the map of routes, and a map of API versions served.
-func CreateRouteMap(rs []Route, disabledRouteIDs []int, perlHandler http.HandlerFunc, authBase middleware.AuthBase, reqTimeOutSeconds int) (map[string][]PathHandler, map[api.Version]struct{}) {
+func CreateRouteMap(rs []Route, disabledRouteIDs []int, perlHandler http.HandlerFunc, authBase middleware.AuthBase, reqTimeOutSeconds int, ipRuleCache *iprule.RuleCache, trustedProxyCIDRs []*net.IPNet) (map[string][]PathHandler, map[api.Version]struct{}) {
 	// TODO strong types for method, path
 	versions := getSortedRouteVersions(rs)
 	requestTimeout := middleware.DefaultRequestTimeout
@@ -194,7 +207,7 @@ func CreateRouteMap(rs []Route, disabledRouteIDs []int, perlHandler http.Handler
 		versionI := indexOfApiVersion(versions, r.Version)
 		nextMajorVer := r.Version.Major + 1
 		_, isDisabledRoute := disabledRoutes[r.ID]
-		r.SetMiddleware(authBase, requestTimeout)
+		r.SetMiddleware(authBase, requestTimeout, ipRuleCache, trustedProxyCIDRs)
 		for _, version := range versions[versionI:] {
 			if version.Major >= nextMajorVer {
 				break
@@ -448,7 +461,7 @@ func RegisterRoutes(d ServerData) error {
 	}
 
 	authBase := middleware.AuthBase{Secret: d.Config.Secrets[0], Override: nil} //we know d.Config.Secrets is a slice of at least one or start up would fail.
-	routes, versions := CreateRouteMap(routeSlice, d.DisabledRoutes, handlerToFunc(catchall), authBase, d.RequestTimeout)
+	routes, versions := CreateRouteMap(routeSlice, d.DisabledRoutes, handlerToFunc(catchall), authBase, d.RequestTimeout, d.IPRuleCache, d.Config.ParsedTrustedProxyCIDRs)
 
 	compiledRoutes := CompileRoutes(routes)
 	getReqID := nextReqIDGetter()

@@ -148,7 +148,7 @@ func TestCompileRoutes(t *testing.T) {
 	}
 
 	authBase := middleware.AuthBase{Secret: d.Secrets[0], Override: nil}
-	routes, versions := CreateRouteMap(routeSlice, nil, nil, authBase, 1)
+	routes, versions := CreateRouteMap(routeSlice, nil, nil, authBase, 1, nil, nil)
 	if len(routes) == 0 {
 		t.Error("no routes handler defined")
 	}
@@ -248,7 +248,7 @@ func TestCreateRouteMap(t *testing.T) {
 
 	disabledRoutesIDs := []int{4}
 
-	routeMap, _ := CreateRouteMap(routes, disabledRoutesIDs, CatchallHandler, authBase, 60)
+	routeMap, _ := CreateRouteMap(routes, disabledRoutesIDs, CatchallHandler, authBase, 60, nil, nil)
 
 	route1Handler := routeMap["GET"][0].Handler
 
@@ -318,14 +318,15 @@ func getAuthWasCalled(ctx context.Context) string {
 
 func TestRoute_SetMiddlewares(t *testing.T) {
 	r := Route{}
-	r.SetMiddleware(middleware.AuthBase{Secret: "secret"}, 600*time.Second)
+	r.SetMiddleware(middleware.AuthBase{Secret: "secret"}, 600*time.Second, nil, nil)
 	preLen := len(r.Middlewares)
 	if preLen != 5 {
 		t.Errorf("Unauthenticated routes should have 5 middlewares by default, actual default: %d", preLen)
 	}
 	r.Authenticated = true
-	r.SetMiddleware(middleware.AuthBase{Secret: "secret", Override: nil}, 600*time.Second)
-	if len(r.Middlewares) != preLen+2 {
-		t.Errorf("Authenticated routes that start with %d middlewares should wind up with %d after setting up defaults, actual amount: %d", preLen, preLen+2, len(r.Middlewares))
+	r.SetMiddleware(middleware.AuthBase{Secret: "secret", Override: nil}, 600*time.Second, nil, nil)
+	// +3: authWrapper + IPRuleMiddleware (nil cache → pass-through) + RequiredPermissionsMiddleware
+	if len(r.Middlewares) != preLen+3 {
+		t.Errorf("Authenticated routes that start with %d middlewares should wind up with %d after setting up defaults, actual amount: %d", preLen, preLen+3, len(r.Middlewares))
 	}
 }
