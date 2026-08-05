@@ -1,0 +1,93 @@
+<!--
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+specific language governing permissions and limitations
+under the License.
+-->
+
+<div class="x_panel">
+    <div class="x_title">
+        <ol class="breadcrumb">
+            <li><a ng-click="navigateToPath('/user/api-tokens')">API Tokens</a></li>
+            <li class="active">{{settings.isNew ? 'New' : apiToken.name}}</li>
+        </ol>
+        <div class="clearfix"></div>
+    </div>
+    <div class="x_content">
+        <br>
+        <!-- Show token secret once after creation -->
+        <div ng-if="createdSecret" class="alert alert-success" role="alert">
+            <strong>Token Created!</strong> Copy your token secret now — it will not be shown again.<br>
+            <code style="word-break:break-all;font-size:1.1em;">{{createdSecret}}</code>
+        </div>
+
+        <form name="apiTokenForm" class="form-horizontal form-label-left" novalidate ng-hide="createdSecret">
+            <div class="form-group" ng-class="{'has-error': hasError(apiTokenForm.tokenName), 'has-feedback': hasError(apiTokenForm.tokenName)}">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Name *</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <input name="tokenName" type="text" class="form-control" ng-model="apiToken.name" placeholder="e.g. my-automation-script" required autofocus maxlength="255">
+                    <small class="input-error" ng-show="hasPropertyError(apiTokenForm.tokenName, 'required')">Required</small>
+                    <span ng-show="hasError(apiTokenForm.tokenName)" class="form-control-feedback"><i class="fa fa-times"></i></span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Expiry (days)</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <input name="expiryDays" type="number" class="form-control" ng-model="apiToken.expiryDays" placeholder="90" min="1" max="365">
+                    <small class="help-block">Number of days until the token expires (1–365). Leave blank for 90 days (default).</small>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Scoped Permissions</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <input name="scopedPermissions" type="text" class="form-control" ng-model="apiToken.scopedPermissionsStr"
+                           placeholder="e.g. DS:READ, CDN:READ  (comma-separated; leave blank for all user capabilities)">
+                    <small class="help-block">
+                        Comma-separated capability names. Effective permissions = intersection of this list and your current capabilities.
+                        Leave blank to inherit all your capabilities.
+                    </small>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Allowed CIDRs</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <input name="allowedCidrs" type="text" class="form-control" ng-model="apiToken.allowedCidrsStr"
+                           placeholder="e.g. 10.0.0.0/8, 192.168.1.0/24  (comma-separated; required for admin/ops tokens)">
+                    <small class="help-block">
+                        Comma-separated CIDR blocks. Requests not originating from these CIDRs will be rejected.
+                        Required when the token owner has Operations or Admin privileges.
+                    </small>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-success"
+                        ng-disabled="apiTokenForm.$invalid"
+                        ng-click="save(apiToken)">Create Token</button>
+                <button type="button" class="btn btn-default"
+                        ng-click="navigateToPath('/user/api-tokens')">Cancel</button>
+            </div>
+        </form>
+
+        <div ng-if="createdSecret" class="modal-footer">
+            <button type="button" class="btn btn-primary" ng-click="navigateToPath('/user/api-tokens')">
+                Back to API Tokens
+            </button>
+        </div>
+    </div>
+</div>
