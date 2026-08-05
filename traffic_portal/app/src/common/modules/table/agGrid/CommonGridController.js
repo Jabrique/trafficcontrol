@@ -283,8 +283,12 @@ let CommonGridController = function ($scope, $document, $state, userModel, dateU
 	};
 
 	this.getColumns = () => {
+		// columnApi may be null before ag-Grid finishes initializing.
+		if (!this.gridOptions.columnApi) return [];
 		/** @type {{colId: string}[]} */
 		const cols = this.gridOptions.columnApi.getAllColumns();
+		// getAllColumns() returns null during grid init — guard to prevent crash.
+		if (!cols) return [];
 		if (!this.hasSensitiveColumns || this.sensitiveColumnsShown) {
 			return cols;
 		}

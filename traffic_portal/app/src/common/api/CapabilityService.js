@@ -19,12 +19,22 @@
 
 var CapabilityService = function($http, messageModel, ENV) {
 
+	/**
+	 * Fetches all capabilities from Traffic Ops (GET /api/3.0/capabilities).
+	 * The /api/3.0 path is intentional — this endpoint was not ported to later API versions.
+	 * Custom capabilities (API-TOKEN:*, API-IP-RULE:*) are available here once the
+	 * corresponding DB migrations have been applied.
+	 *
+	 * @param {Object} [queryParams] - Optional query parameters (e.g. {name: 'FOO:READ'}).
+	 * @returns {Promise<Array<{name: string}>>}
+	 */
 	this.getCapabilities = function(queryParams) {
-		return $http.get(ENV.api.unstable + 'capabilities', {params: queryParams}).then(
+		return $http.get('/api/3.0/capabilities', {params: queryParams}).then(
 			function(result) {
 				return result.data.response;
 			},
 			function(err) {
+				messageModel.setMessages(err.data.alerts, false);
 				throw err;
 			}
 		);

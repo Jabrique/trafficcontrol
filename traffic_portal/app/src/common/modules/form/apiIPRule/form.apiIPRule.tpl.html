@@ -1,0 +1,134 @@
+<!--
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+specific language governing permissions and limitations
+under the License.
+-->
+
+<div class="x_panel">
+    <div class="x_title">
+        <ol class="breadcrumb">
+            <li><a ng-click="navigateToPath('/api-ip-rules')">API IP Rules</a></li>
+            <li class="active">{{settings.isNew ? 'New' : apiIPRule.name}}</li>
+        </ol>
+        <div class="clearfix"></div>
+    </div>
+    <div class="x_content">
+        <br>
+        <form name="apiIPRuleForm" class="form-horizontal form-label-left" novalidate>
+
+            <div class="form-group" ng-class="{'has-error': hasError(apiIPRuleForm.ruleName), 'has-feedback': hasError(apiIPRuleForm.ruleName)}">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Name *</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <input name="ruleName" type="text" class="form-control" ng-model="apiIPRule.name" required autofocus maxlength="255">
+                    <small class="input-error" ng-show="hasPropertyError(apiIPRuleForm.ruleName, 'required')">Required</small>
+                    <span ng-show="hasError(apiIPRuleForm.ruleName)" class="form-control-feedback"><i class="fa fa-times"></i></span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Priority *</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <input name="priority" type="number" class="form-control" ng-model="apiIPRule.priority" min="0" max="9999" required placeholder="100">
+                    <small class="help-block">Lower value = evaluated first. First-match-wins.</small>
+                </div>
+            </div>
+
+            <div class="form-group" ng-class="{'has-error': hasError(apiIPRuleForm.endpointRegex), 'has-feedback': hasError(apiIPRuleForm.endpointRegex)}">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Endpoint Regex *</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <div class="input-group">
+                        <input name="endpointRegex" type="text" class="form-control" ng-model="apiIPRule.endpointRegex" required placeholder="e.g. ^user/api_tokens">
+                        <span class="input-group-btn">
+                            <button type="button" class="btn btn-default" ng-click="openEndpointBrowser()" title="Browse available endpoints">
+                                <i class="fa fa-list"></i> Browse
+                            </button>
+                        </span>
+                    </div>
+                    <small class="help-block">Go regexp matched against the URL path after stripping the /api/X.Y prefix. Click Browse to pick from available endpoints.</small>
+                    <small class="input-error" ng-show="hasPropertyError(apiIPRuleForm.endpointRegex, 'required')">Required</small>
+                    <span ng-show="hasError(apiIPRuleForm.endpointRegex)" class="form-control-feedback"><i class="fa fa-times"></i></span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">HTTP Methods</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <div class="btn-group" role="group" style="flex-wrap: wrap; display: flex; gap: 4px;">
+                        <button type="button" class="btn btn-sm"
+                                ng-repeat="m in allHttpMethods"
+                                ng-class="selectedMethods[m] ? 'btn-primary' : 'btn-default'"
+                                ng-click="selectedMethods[m] = !selectedMethods[m]">{{ m }}</button>
+                    </div>
+                    <small class="help-block">Click to toggle. Leave all unselected to match all methods.</small>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Allowed CIDRs</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <input name="allowedCidrs" type="text" class="form-control" ng-model="apiIPRule.allowedCidrsStr"
+                           placeholder="e.g. 10.0.0.0/8, 192.168.1.0/24  (comma-separated)">
+                    <small class="help-block">Only requests from these CIDRs are allowed. Leave blank to allow any IP.</small>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Denied CIDRs</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <input name="deniedCidrs" type="text" class="form-control" ng-model="apiIPRule.deniedCidrsStr"
+                           placeholder="e.g. 0.0.0.0/0  (comma-separated)">
+                    <small class="help-block">Requests from these CIDRs are always denied (takes precedence over allowed CIDRs).</small>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Applies To</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <div class="checkbox">
+                        <label>
+                            <input type="checkbox" ng-model="apiIPRule.appliesToApiToken"> API Token requests
+                        </label>
+                    </div>
+                    <div class="checkbox">
+                        <label>
+                            <input type="checkbox" ng-model="apiIPRule.appliesToSession"> Session (cookie) requests
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="control-label col-md-2 col-sm-2 col-xs-12">Active</label>
+                <div class="col-md-10 col-sm-10 col-xs-12">
+                    <div class="checkbox">
+                        <label>
+                            <input type="checkbox" ng-model="apiIPRule.active"> Rule is active
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-danger" ng-show="!settings.isNew" ng-click="confirmDelete(apiIPRule)">Delete</button>
+                <button type="button" class="btn btn-success"
+                        ng-disabled="apiIPRuleForm.$invalid"
+                        ng-click="save(apiIPRule)">{{settings.saveLabel}}</button>
+                <button type="button" class="btn btn-default"
+                        ng-click="navigateToPath('/api-ip-rules')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>

@@ -1,0 +1,75 @@
+<!--
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+specific language governing permissions and limitations
+under the License.
+-->
+
+<div class="modal-header">
+    <button type="button" class="close" ng-click="cancel()"><span aria-hidden="true">&times;</span></button>
+    <h3 class="modal-title"><i class="fa fa-list"></i> Browse API Endpoints</h3>
+    <small class="text-muted">Select an endpoint to auto-fill the Endpoint Regex field. The route pattern will be converted to a Go regexp.</small>
+</div>
+
+<div class="modal-body" style="max-height: 500px; overflow-y: auto;">
+
+    <!-- Search -->
+    <div class="form-group" style="margin-bottom: 10px;">
+        <div class="input-group">
+            <span class="input-group-addon"><i class="fa fa-search"></i></span>
+            <input id="endpointFilterInput" type="text" class="form-control"
+                   ng-model="filter" placeholder="Filter by route…" autofocus>
+        </div>
+    </div>
+
+    <!-- Loading / Error -->
+    <div class="text-center text-muted" ng-show="loading">
+        <i class="fa fa-spinner fa-spin"></i> Loading endpoints…
+    </div>
+    <div class="alert alert-danger" ng-show="error">
+        <i class="fa fa-exclamation-triangle"></i> {{ error }}
+    </div>
+
+    <!-- Endpoint table -->
+    <table class="table table-hover table-condensed" ng-show="!loading && !error">
+        <thead>
+            <tr>
+                <th>Route</th>
+                <th>Methods</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr ng-repeat="ep in filteredEndpoints() track by ep.route"
+                ng-click="select(ep)"
+                style="cursor: pointer;">
+                <td><code>{{ ep.route }}</code></td>
+                <td>
+                    <span ng-repeat="m in ep.methods"
+                          class="label label-default"
+                          style="margin-right: 3px;">{{ m }}</span>
+                    <span ng-if="ep.methods.length === 0" class="text-muted">all</span>
+                </td>
+            </tr>
+            <tr ng-show="filteredEndpoints().length === 0">
+                <td colspan="2" class="text-center text-muted">No endpoints match your filter.</td>
+            </tr>
+        </tbody>
+    </table>
+
+</div>
+
+<div class="modal-footer">
+    <button type="button" class="btn btn-default" ng-click="cancel()">Cancel</button>
+</div>

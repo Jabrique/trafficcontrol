@@ -1,0 +1,117 @@
+<!--
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+specific language governing permissions and limitations
+under the License.
+-->
+
+<div class="modal-header">
+    <button type="button" class="close" ng-click="cancel()"><span aria-hidden="true">&times;</span></button>
+    <h3 class="modal-title"><i class="fa fa-shield"></i> Test IP Rule Evaluation</h3>
+    <small class="text-muted">Simulate a request against the live IP rule set to check if it would be allowed or denied.</small>
+</div>
+
+<div class="modal-body">
+    <form name="evaluateForm" novalidate>
+
+        <!-- IP Address -->
+        <div class="form-group" ng-class="{'has-error': evaluateForm.ip.$invalid && evaluateForm.ip.$touched}">
+            <label class="control-label col-sm-3">Client IP *</label>
+            <div class="col-sm-9">
+                <input id="evalIp" name="ip" type="text" class="form-control"
+                       ng-model="form.ip" required placeholder="e.g. 192.168.1.5 or ::1">
+                <small class="help-block">IPv4 or IPv6 address to test (no CIDR mask).</small>
+            </div>
+        </div>
+
+        <!-- HTTP Method -->
+        <div class="form-group">
+            <label class="control-label col-sm-3">HTTP Method *</label>
+            <div class="col-sm-9">
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-sm"
+                            ng-repeat="m in httpMethods"
+                            ng-class="form.method === m ? 'btn-primary' : 'btn-default'"
+                            ng-click="form.method = m">{{ m }}</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Path -->
+        <div class="form-group" ng-class="{'has-error': evaluateForm.path.$invalid && evaluateForm.path.$touched}">
+            <label class="control-label col-sm-3">API Path *</label>
+            <div class="col-sm-9">
+                <input id="evalPath" name="path" type="text" class="form-control"
+                       ng-model="form.path" required placeholder="e.g. user/api_tokens">
+                <small class="help-block">Path after <code>/api/5.0/</code> prefix. No leading slash needed.</small>
+            </div>
+        </div>
+
+        <!-- Auth Type -->
+        <div class="form-group">
+            <label class="control-label col-sm-3">Auth Type</label>
+            <div class="col-sm-9">
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-sm"
+                            ng-class="form.authType === 'token' ? 'btn-primary' : 'btn-default'"
+                            ng-click="form.authType = 'token'">API Token</button>
+                    <button type="button" class="btn btn-sm"
+                            ng-class="form.authType === 'session' ? 'btn-primary' : 'btn-default'"
+                            ng-click="form.authType = 'session'">Session (Cookie)</button>
+                </div>
+                <small class="help-block">Which auth mechanism the simulated request uses.</small>
+            </div>
+        </div>
+
+        <!-- Error -->
+        <div class="alert alert-danger" ng-show="error">
+            <i class="fa fa-exclamation-triangle"></i> {{ error }}
+        </div>
+
+        <!-- Result -->
+        <div ng-show="result" class="well" style="margin-top: 12px;">
+            <div class="text-center" style="margin-bottom: 8px;">
+                <span ng-if="result.allowed"
+                      class="label label-success" style="font-size: 16px; padding: 8px 20px;">
+                    <i class="fa fa-check-circle"></i> ALLOWED
+                </span>
+                <span ng-if="!result.allowed"
+                      class="label label-danger" style="font-size: 16px; padding: 8px 20px;">
+                    <i class="fa fa-times-circle"></i> DENIED
+                </span>
+            </div>
+            <p class="text-center" style="margin: 8px 0 4px;">
+                <strong>{{ result.message }}</strong>
+            </p>
+            <p class="text-center text-muted" ng-show="result.matchedRule">
+                Matched rule: <code>{{ result.matchedRule }}</code>
+            </p>
+            <p class="text-center text-muted" ng-show="!result.matchedRule">
+                No rule matched — fail-open default applied.
+            </p>
+        </div>
+
+    </form>
+</div>
+
+<div class="modal-footer">
+    <button type="button" class="btn btn-default" ng-click="cancel()">Close</button>
+    <button type="button" class="btn btn-primary"
+            ng-disabled="evaluateForm.$invalid || loading"
+            ng-click="evaluate()">
+        <span ng-if="!loading"><i class="fa fa-play"></i> Test</span>
+        <span ng-if="loading"><i class="fa fa-spinner fa-spin"></i> Testing…</span>
+    </button>
+</div>
